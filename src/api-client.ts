@@ -50,7 +50,7 @@ export async function getSyncSettings(opts: ApiClientOptions): Promise<SyncSetti
 
   let res: Response
   try {
-    res = await fetch(`${serverUrl}/api/sync-settings`, {
+    res = await fetch(`${serverUrl}/api/account/settings/sync`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${pat}`,
