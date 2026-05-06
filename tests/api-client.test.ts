@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { getSyncSettings, ApiPatAuthError } from '../src/api-client'
+import { getSyncSettings, putSyncSettings, ApiPatAuthError } from '../src/api-client'
 
 const BASE_OPTS = {
   serverUrl: 'https://example.test',
@@ -69,5 +69,52 @@ describe('getSyncSettings', () => {
     vi.stubGlobal('fetch', makeFetchMock(200, body))
 
     await expect(getSyncSettings(BASE_OPTS)).rejects.toThrow(/updated_at/)
+  })
+})
+
+describe('putSyncSettings', () => {
+  it('returns SyncSettingsResponse on 200 and sends PUT body', async () => {
+    const body = { interval_seconds: 60, updated_at: '2024-01-01T00:00:00Z' }
+    const fetchMock = makeFetchMock(200, body)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await putSyncSettings(BASE_OPTS, 60)
+    expect(result.interval_seconds).toBe(60)
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.method).toBe('PUT')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    expect(JSON.parse(init.body)).toEqual({ interval_seconds: 60 })
+  })
+
+  it('floors fractional input', async () => {
+    const body = { interval_seconds: 60, updated_at: '2024-01-01T00:00:00Z' }
+    const fetchMock = makeFetchMock(200, body)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await putSyncSettings(BASE_OPTS, 60.9)
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ interval_seconds: 60 })
+  })
+
+  it('rejects out-of-range interval (5)', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    await expect(putSyncSettings(BASE_OPTS, 5)).rejects.toThrow(/between 10 and 3600/)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('rejects out-of-range interval (4000)', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    await expect(putSyncSettings(BASE_OPTS, 4000)).rejects.toThrow(/between 10 and 3600/)
+  })
+
+  it('throws ApiPatAuthError on 401', async () => {
+    vi.stubGlobal('fetch', makeFetchMock(401, {}))
+    await expect(putSyncSettings(BASE_OPTS, 60)).rejects.toBeInstanceOf(ApiPatAuthError)
+  })
+
+  it('includes server error detail on 400', async () => {
+    vi.stubGlobal('fetch', makeFetchMock(400, { error: 'plan minimum is 300' }))
+    await expect(putSyncSettings(BASE_OPTS, 60)).rejects.toThrow(/HTTP 400.*plan minimum is 300/)
   })
 })

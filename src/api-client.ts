@@ -72,3 +72,55 @@ export async function getSyncSettings(opts: ApiClientOptions): Promise<SyncSetti
   const body = await res.json()
   return validateBody(body)
 }
+
+export async function putSyncSettings(
+  opts: ApiClientOptions,
+  intervalSeconds: number
+): Promise<SyncSettingsResponse> {
+  if (
+    !Number.isFinite(intervalSeconds) ||
+    intervalSeconds < MIN_INTERVAL_SECONDS ||
+    intervalSeconds > MAX_INTERVAL_SECONDS
+  ) {
+    throw new Error(
+      `interval_seconds must be a finite number between ${MIN_INTERVAL_SECONDS} and ${MAX_INTERVAL_SECONDS}`
+    )
+  }
+
+  const { serverUrl, pat, timeoutMs = 5000 } = opts
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  let res: Response
+  try {
+    res = await fetch(`${serverUrl}/api/account/settings/sync`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${pat}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ interval_seconds: Math.floor(intervalSeconds) }),
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (res.status === 401) {
+    throw new ApiPatAuthError()
+  }
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const errBody = (await res.json()) as { error?: string }
+      if (errBody.error) detail = `: ${errBody.error}`
+    } catch {
+      // body not JSON
+    }
+    throw new Error(`Sync settings PUT failed: HTTP ${res.status}${detail}`)
+  }
+
+  const body = await res.json()
+  return validateBody(body)
+}

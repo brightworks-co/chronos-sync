@@ -14,6 +14,8 @@
  *   daemon --status       Raw JSON daemon snapshot (internal).
  *   status                Pretty per-room sync status (one-shot).
  *   health                Health check verdict.
+ *   interval <seconds>    Set sync interval via web KV PUT (10~3600).
+ *   interval --get        Show current sync interval from web KV.
  *   version               Print version.
  */
 
@@ -64,6 +66,19 @@ switch (cmd) {
     })
     break
 
+  case 'interval':
+    import('../src/cli/interval.js').then(async (m) => {
+      const result =
+        args[0] === '--get' || args.length === 0
+          ? await m.runIntervalGet()
+          : await m.runIntervalSet(args[0])
+      process.exit(result.exitCode)
+    }).catch((err: unknown) => {
+      process.stderr.write('chronos-sync: interval error: ' + String(err) + '\n')
+      process.exit(1)
+    })
+    break
+
   case 'health':
     import('../src/state-file.js').then(async (stateModule) => {
       const { checkHealth } = await import('../src/health.js')
@@ -106,6 +121,8 @@ function printUsage(): void {
 명령어:
   status                    설정 + 룸별 마지막 동기화 시각
   health                    헬스 체크 결과 (JSON)
+  interval <초>             동기화 주기 변경 (10~3600). 데몬 다음 cycle 자동 반영.
+  interval --get            현재 동기화 주기 조회 (web KV 기준).
   daemon                    백그라운드 루프 (launchd 전용, 일반 사용자 비권장)
   version                   버전 표시
   help                      도움말 표시
