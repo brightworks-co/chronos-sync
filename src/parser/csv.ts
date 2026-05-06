@@ -140,17 +140,39 @@ export function parseMacCsv(raw: string, opts: ParseOptions = {}): ParseResult {
     let timestamp = 0
 
     if (rawDate) {
-      // Format: YYYY-MM-DD HH:MM:SS
-      const m = rawDate.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})/)
+      // Mac KakaoTalk export uses a dotted, variable-width format —
+      // e.g. `2026.5.5 0:02` (1~2 digit month/day/hour, no seconds).
+      // Older exports use a dashed zero-padded format like
+      // `2026-05-05 00:02:00`. Match both shapes and zero-pad to the
+      // canonical `YYYY-MM-DD HH:MM` we store everywhere downstream.
+      const m = rawDate.match(/^(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})\s+(\d{1,2}):(\d{2})/)
       if (m) {
-        date = m[1]
-        time = `${m[2]}:${m[3]}`
+        const yyyy = m[1]
+        const mo = m[2].padStart(2, '0')
+        const d = m[3].padStart(2, '0')
+        const hh = m[4].padStart(2, '0')
+        const min = m[5]
+        date = `${yyyy}-${mo}-${d}`
+        time = `${hh}:${min}`
         datetime = `${date} ${time}`
         timestamp = toTimestampKst(date, time)
       }
     }
 
-    // sequence_in_minute
+    const senderRaw = rawUser
+    const senderNormalized = rawUser ? normalizeSender(rawUser) : ''
+    const content = normalizeContent(rawMessage)
+
+    // Skip empty-text rows. KakaoTalk Mac/Windows exports leave non-text
+    // messages (이모티콘 / 사진 / 음성메시지 / 동영상 / 보이스톡) as a
+    // blank Message column. Pushing them creates ghost rows in the
+    // viewer ("아무 내용도 없는 채팅글"). The daemon's kakaocli output
+    // independently emits the same blank text for the same messages
+    // (type='unknown', text=''). Drop them here so daemon path and
+    // manual export path produce the same record set.
+    if (content.length === 0) continue
+
+    // sequence_in_minute — counted only for rows we keep.
     const minuteKey = date && time ? `${date}|${time}` : null
     if (minuteKey) {
       if (minuteKey !== lastMinuteKey) {
@@ -161,9 +183,6 @@ export function parseMacCsv(raw: string, opts: ParseOptions = {}): ParseResult {
       }
     }
 
-    const senderRaw = rawUser
-    const senderNormalized = rawUser ? normalizeSender(rawUser) : ''
-    const content = normalizeContent(rawMessage)
     const kind = classifyMessage(content, senderRaw)
 
     messages.push({
