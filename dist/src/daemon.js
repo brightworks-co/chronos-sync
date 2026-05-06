@@ -19,12 +19,15 @@
  *   SIGTERM → release lock + exit 0 cleanly.
  */
 import { reassembleMacCsv } from './csv-reassemble.js';
-import { listMessages } from './kakaocli.js';
+import { listMessages, harvestScroll } from './kakaocli.js';
 import { parseExport } from './parser/index.js';
 import { resolveSenderNames } from './sender-resolver.js';
 import { Uploader, UploadError } from './uploader.js';
 import { checkHealth } from './health.js';
 import { acquireLock, loadConfig, loadState, saveState, getRoomState, setRoomState, releaseLock, } from './state-file.js';
+import { resolveInterval } from './interval-resolver.js';
+import { DEFAULT_HARVEST_MAX_PAGES } from './types.js';
+import { detectHarvest } from './harvest-detector.js';
 /**
  * Run a single sync cycle for every configured room. Returns counters
  * so the caller can decide whether the cycle was healthy overall.
@@ -33,12 +36,14 @@ import { acquireLock, loadConfig, loadState, saveState, getRoomState, setRoomSta
  * room's work finishes — success or failure — so foreground UIs can
  * stream a per-room status line without parsing the JSONL log stream.
  */
-export async function runCycle(cfg, state, log = defaultLog, onRoom) {
+export async function runCycle(cfg, state, log = defaultLog, onRoom, onHarvest) {
+    state.daemon.cycle_index += 1;
+    const resolved = await resolveInterval(cfg, state, { now: Date.now, log });
     let uploaded_rooms = 0;
     let failed_rooms = 0;
     for (const room of cfg.rooms) {
         try {
-            const newCount = await syncRoom(cfg, state, room, log);
+            const newCount = await syncRoom(cfg, state, room, log, onHarvest);
             if (newCount > 0)
                 uploaded_rooms += 1;
             onRoom?.({ room, new_messages: newCount });
@@ -62,7 +67,7 @@ export async function runCycle(cfg, state, log = defaultLog, onRoom) {
     }
     state.daemon.last_cycle_at = Date.now();
     await saveState(state);
-    return { uploaded_rooms, failed_rooms };
+    return { outcome: { uploaded_rooms, failed_rooms }, resolved };
 }
 /**
  * Compute the `--since` argument for a kakaocli call.
@@ -96,9 +101,49 @@ export function computeSince(cfg, cursor, now = Date.now()) {
     const seconds = Math.max(1, Math.floor(cfg.interval_seconds * multiplier));
     return new Date(now - seconds * 1000).toISOString();
 }
-async function syncRoom(cfg, state, room, log) {
+async function syncRoom(cfg, state, room, log, onHarvest) {
     const cursor = getRoomState(state, room.project_id, room.room_name);
-    const since = computeSince(cfg, cursor);
+    const decision = detectHarvest({
+        config: cfg,
+        state,
+        roomState: cursor,
+        now: Date.now(),
+        cycleIndex: state.daemon.cycle_index,
+    });
+    if (decision.trigger && (room.chat_name !== undefined || room.chat_id !== undefined)) {
+        log('info', 'harvest --scroll triggered', {
+            room_name: room.room_name,
+            reason: decision.reason,
+        });
+        const harvest = await harvestScroll({
+            chat: room.chat_id !== undefined ? undefined : room.chat_name,
+            chatId: room.chat_id,
+            binary: cfg.kakaocli_path,
+            maxPages: cfg.harvest?.max_pages ?? DEFAULT_HARVEST_MAX_PAGES,
+        });
+        if (harvest.code !== 0) {
+            log('warn', 'harvest --scroll non-zero exit (continuing)', {
+                room_name: room.room_name,
+                code: harvest.code,
+                stderr: harvest.stderr.slice(0, 200),
+            });
+        }
+        // mark last_harvest_at regardless of code (rate limit gates retries)
+        setRoomState(state, room.project_id, room.room_name, {
+            ...cursor,
+            last_harvest_at: Date.now(),
+        });
+        onHarvest?.({ roomName: room.room_name, reason: decision.reason, code: harvest.code });
+    }
+    else if (decision.reason === 'rate_limited_skip') {
+        log('info', 'harvest --scroll skipped (rate limited)', {
+            room_name: room.room_name,
+        });
+        onHarvest?.({ roomName: room.room_name, reason: 'rate_limited_skip' });
+    }
+    // Re-read cursor after possible last_harvest_at update
+    const updatedCursor = getRoomState(state, room.project_id, room.room_name);
+    const since = computeSince(cfg, updatedCursor);
     const messages = await listMessages({
         chat: room.chat_id !== undefined ? undefined : room.chat_name,
         chatId: room.chat_id,
@@ -108,7 +153,21 @@ async function syncRoom(cfg, state, room, log) {
     if (messages.length === 0) {
         return 0;
     }
-    const enriched = await enrichSenders(messages, cfg.kakaocli_path, log);
+    // Client-side post-filter: kakaocli's `--since` argument is not honored —
+    // the binary returns the most recent N messages regardless of the timestamp.
+    // Without this guard every cycle re-uploads the same window as a dup-only
+    // batch, polluting the project's upload history and wasting server hits.
+    // Once kakaocli respects `--since` natively this guard becomes a no-op.
+    const filtered = updatedCursor.last_synced_ms > 0
+        ? messages.filter((m) => {
+            const ts = typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp);
+            return Number.isFinite(ts) && ts > updatedCursor.last_synced_ms;
+        })
+        : messages;
+    if (filtered.length === 0) {
+        return 0;
+    }
+    const enriched = await enrichSenders(filtered, cfg.kakaocli_path, log);
     // Reassemble CSV → parse so the server sees ParsedMessage[] with `kind`.
     const csv = reassembleMacCsv(enriched);
     const parsed = parseExport(csv);
@@ -129,11 +188,14 @@ async function syncRoom(cfg, state, room, log) {
     }, parsed.messages, csv);
     // Advance the cursor only after finalize 200. The kakaocli timestamp is
     // either ms epoch or ISO; Date.parse handles both for the highest seen.
-    const lastTs = messages.reduce((max, m) => {
+    // Use `filtered` so the cursor reflects only the messages we actually
+    // uploaded — kakaocli emits older messages too (since-filter is broken).
+    const lastTs = filtered.reduce((max, m) => {
         const t = typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp);
         return Number.isFinite(t) && t > max ? t : max;
-    }, cursor.last_synced_ms);
+    }, updatedCursor.last_synced_ms);
     setRoomState(state, room.project_id, room.room_name, {
+        ...updatedCursor,
         last_synced_ms: lastTs,
         last_success_at: Date.now(),
         consecutive_failures: 0,
@@ -142,9 +204,10 @@ async function syncRoom(cfg, state, room, log) {
         chat_name: room.chat_name,
         chat_id: room.chat_id,
         room_name: room.room_name,
-        new_messages: messages.length,
+        new_messages: filtered.length,
+        raw_messages: messages.length,
     });
-    return messages.length;
+    return filtered.length;
 }
 /**
  * Resolve `sender: null` rows by querying the local KakaoTalk DB for
@@ -235,9 +298,11 @@ export async function runLoop(options = {}) {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
     while (!shuttingDown) {
+        let resolved;
         try {
-            const outcome = await runCycle(cfg, state, log, options.onRoom);
-            options.onCycle?.(outcome);
+            const result = await runCycle(cfg, state, log, options.onRoom, options.onHarvest);
+            resolved = result.resolved;
+            options.onCycle?.(result.outcome, resolved);
         }
         catch (err) {
             log('error', 'cycle threw', {
@@ -252,7 +317,8 @@ export async function runLoop(options = {}) {
                 process.exit(1);
             }
         }
-        await sleep(cfg.interval_seconds * 1000);
+        const sleepMs = resolved ? resolved.value * 1000 : cfg.interval_seconds * 1000;
+        await sleep(sleepMs);
     }
 }
 /**

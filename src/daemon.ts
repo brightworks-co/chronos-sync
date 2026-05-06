@@ -213,7 +213,25 @@ async function syncRoom(
     return 0
   }
 
-  const enriched = await enrichSenders(messages, cfg.kakaocli_path, log)
+  // Client-side post-filter: kakaocli's `--since` argument is not honored —
+  // the binary returns the most recent N messages regardless of the timestamp.
+  // Without this guard every cycle re-uploads the same window as a dup-only
+  // batch, polluting the project's upload history and wasting server hits.
+  // Once kakaocli respects `--since` natively this guard becomes a no-op.
+  const filtered =
+    updatedCursor.last_synced_ms > 0
+      ? messages.filter((m) => {
+          const ts =
+            typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp)
+          return Number.isFinite(ts) && ts > updatedCursor.last_synced_ms
+        })
+      : messages
+
+  if (filtered.length === 0) {
+    return 0
+  }
+
+  const enriched = await enrichSenders(filtered, cfg.kakaocli_path, log)
 
   // Reassemble CSV → parse so the server sees ParsedMessage[] with `kind`.
   const csv = reassembleMacCsv(enriched)
@@ -243,7 +261,9 @@ async function syncRoom(
 
   // Advance the cursor only after finalize 200. The kakaocli timestamp is
   // either ms epoch or ISO; Date.parse handles both for the highest seen.
-  const lastTs = messages.reduce((max, m) => {
+  // Use `filtered` so the cursor reflects only the messages we actually
+  // uploaded — kakaocli emits older messages too (since-filter is broken).
+  const lastTs = filtered.reduce((max, m) => {
     const t = typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp)
     return Number.isFinite(t) && t > max ? t : max
   }, updatedCursor.last_synced_ms)
@@ -259,10 +279,11 @@ async function syncRoom(
     chat_name: room.chat_name,
     chat_id: room.chat_id,
     room_name: room.room_name,
-    new_messages: messages.length,
+    new_messages: filtered.length,
+    raw_messages: messages.length,
   })
 
-  return messages.length
+  return filtered.length
 }
 
 /**
