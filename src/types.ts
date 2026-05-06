@@ -67,8 +67,21 @@ export interface DaemonConfig {
    * `interval_seconds * 2` as the floor for the fallback window.
    */
   since?: SinceOverride
+  /** Optional harvest threshold overrides. When omitted, defaults apply (12h/24h/30min/5pages). */
+  harvest?: HarvestThresholds
   /** Rooms the daemon should keep in sync. */
   rooms: RoomConfig[]
+}
+
+export interface HarvestThresholds {
+  /** Gap threshold (sec). Gap between previous cycle last message and new message timestamp; triggers harvest when exceeded. Default 12h (43200). */
+  gap_seconds?: number
+  /** Startup threshold (sec). On daemon first cycle, triggers harvest when last_message_at is older than this value. Default 24h (86400). */
+  startup_seconds?: number
+  /** Rate limit (sec). Minimum interval between harvest calls for the same room. Default 30min (1800). */
+  rate_limit_seconds?: number
+  /** Max pages for kakaocli harvest --scroll. Default 5. */
+  max_pages?: number
 }
 
 export interface RoomState {
@@ -78,6 +91,8 @@ export interface RoomState {
   last_success_at: number
   /** Number of consecutive cycle failures since the last success. */
   consecutive_failures: number
+  /** Wall-clock timestamp of the last kakaocli harvest --scroll call (epoch ms). 0 = never called. */
+  last_harvest_at?: number
 }
 
 export type IntervalSource = 'server' | 'cached' | 'config' | 'default'
@@ -112,3 +127,8 @@ export const MAX_CONSECUTIVE_FAILURES = 5
 export const MAX_RSS_BYTES = 200 * 1024 * 1024
 export const STUCK_THRESHOLD_MS = 60 * 60 * 1000
 export const CHUNK_SIZE = 500
+
+export const DEFAULT_HARVEST_GAP_SECONDS = 12 * 3600
+export const DEFAULT_HARVEST_STARTUP_SECONDS = 24 * 3600
+export const DEFAULT_HARVEST_RATE_LIMIT_SECONDS = 30 * 60
+export const DEFAULT_HARVEST_MAX_PAGES = 5

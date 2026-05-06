@@ -20,6 +20,7 @@ import {
   MAX_INTERVAL_SECONDS,
 } from '../src/types'
 
+
 let realHome: string | undefined
 
 beforeEach(async () => {
@@ -265,5 +266,63 @@ describe('loadConfig', () => {
   it('throws when rooms is empty', async () => {
     await writeConfig({ ...validBase, rooms: [] })
     await expect(loadConfig()).rejects.toThrow(/rooms must be a non-empty array/)
+  })
+
+  const validRoom = { chat_name: 'room', project_id: 'p1', room_name: 'r1' }
+
+  it('accepts harvest config with all fields', async () => {
+    await writeConfig({
+      ...validBase,
+      rooms: [validRoom],
+      harvest: {
+        gap_seconds: 3600,
+        startup_seconds: 7200,
+        rate_limit_seconds: 600,
+        max_pages: 10,
+      },
+    })
+    const cfg = await loadConfig()
+    expect(cfg.harvest?.gap_seconds).toBe(3600)
+    expect(cfg.harvest?.startup_seconds).toBe(7200)
+    expect(cfg.harvest?.rate_limit_seconds).toBe(600)
+    expect(cfg.harvest?.max_pages).toBe(10)
+  })
+
+  it('returns undefined harvest when harvest field is absent', async () => {
+    await writeConfig({ ...validBase, rooms: [validRoom] })
+    const cfg = await loadConfig()
+    expect(cfg.harvest).toBeUndefined()
+  })
+
+  it('rejects harvest.gap_seconds that is negative', async () => {
+    await writeConfig({
+      ...validBase,
+      rooms: [validRoom],
+      harvest: { gap_seconds: -1 },
+    })
+    await expect(loadConfig()).rejects.toThrow(/config\.harvest\.gap_seconds/)
+  })
+
+  it('rejects harvest when value is not an object', async () => {
+    await writeConfig({ ...validBase, rooms: [validRoom], harvest: 42 })
+    await expect(loadConfig()).rejects.toThrow(/config\.harvest must be an object/)
+  })
+
+  it('floors fractional harvest field values', async () => {
+    await writeConfig({
+      ...validBase,
+      rooms: [validRoom],
+      harvest: { max_pages: 3.9 },
+    })
+    const cfg = await loadConfig()
+    expect(cfg.harvest?.max_pages).toBe(3)
+  })
+})
+
+describe('getRoomState last_harvest_at default', () => {
+  it('returns last_harvest_at 0 for an unseen room', () => {
+    const s = emptyState()
+    const rs = getRoomState(s, 'p1', 'unseen')
+    expect(rs.last_harvest_at).toBe(0)
   })
 })

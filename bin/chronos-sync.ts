@@ -179,6 +179,14 @@ function runForeground(): void {
               view.printHeader(bannerCfg, resolved)
             }
           },
+          onHarvest: (info) => {
+            if (info.reason === 'rate_limited_skip') return
+            process.stdout.write(
+              `\x1b[33m⤴\x1b[0m harvest 호출: ${info.roomName} (reason: ${info.reason}` +
+              (info.code !== undefined ? `, code: ${info.code}` : '') +
+              ')\n'
+            )
+          },
           // exit_on_health_failure stays false → the loop keeps trying;
           // the user can Ctrl+C if it's truly stuck.
         }
