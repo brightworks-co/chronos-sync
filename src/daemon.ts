@@ -233,6 +233,31 @@ async function syncRoom(
 
   const enriched = await enrichSenders(filtered, cfg.kakaocli_path, log)
 
+  // Hold back the entire cycle if any sender could not be resolved. We
+  // never send `참여자_<id>` to the server — once KakaoTalk populates
+  // NTUser for the missing sender_id (typically within a few minutes
+  // after the user first appears in the chat) the next cycle will pick
+  // those messages up cleanly. Cursor stays put so we re-fetch them.
+  const unresolved = enriched.filter(
+    (m) => m.sender === null || m.sender === undefined || m.sender.length === 0
+  )
+  if (unresolved.length > 0) {
+    const stuck = (updatedCursor.consecutive_stuck_cycles ?? 0) + 1
+    setRoomState(state, room.project_id, room.room_name, {
+      ...updatedCursor,
+      consecutive_stuck_cycles: stuck,
+    })
+    log('warn', 'unresolved senders — cycle held back, cursor unchanged', {
+      chat_name: room.chat_name,
+      chat_id: room.chat_id,
+      room_name: room.room_name,
+      held_back: unresolved.length,
+      sample_sender_ids: unresolved.slice(0, 3).map((m) => m.sender_id),
+      consecutive_stuck_cycles: stuck,
+    })
+    return 0
+  }
+
   // Reassemble CSV → parse so the server sees ParsedMessage[] with `kind`.
   const csv = reassembleMacCsv(enriched)
   const parsed = parseExport(csv)
@@ -273,6 +298,7 @@ async function syncRoom(
     last_synced_ms: lastTs,
     last_success_at: Date.now(),
     consecutive_failures: 0,
+    consecutive_stuck_cycles: 0,
   })
 
   log('info', 'sync room ok', {
@@ -327,7 +353,9 @@ export async function enrichSenders(
     const key = String(m.sender_id)
     const resolved = nameMap.get(key)
     if (resolved !== undefined) return { ...m, sender: resolved }
-    return { ...m, sender: `참여자_${m.sender_id}` }
+    // Resolution failed. Leave `sender` as null so the caller can hold
+    // back the entire cycle — we never send `참여자_<id>` to the server.
+    return { ...m, sender: null }
   })
 }
 
