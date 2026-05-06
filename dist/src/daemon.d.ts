@@ -20,7 +20,9 @@
  */
 import { type KakaoCliMessage } from './csv-reassemble.js';
 import { UploadError } from './uploader.js';
+import { type ResolvedInterval } from './interval-resolver.js';
 import type { DaemonConfig, DaemonState, RoomConfig } from './types.js';
+import { type HarvestReason } from './harvest-detector.js';
 interface CycleOutcome {
     /** Number of rooms with new messages uploaded this cycle. */
     uploaded_rooms: number;
@@ -47,7 +49,10 @@ export type RoomCycleListener = (result: RoomCycleResult) => void;
  * room's work finishes — success or failure — so foreground UIs can
  * stream a per-room status line without parsing the JSONL log stream.
  */
-export declare function runCycle(cfg: DaemonConfig, state: DaemonState, log?: DaemonLog, onRoom?: RoomCycleListener): Promise<CycleOutcome>;
+export declare function runCycle(cfg: DaemonConfig, state: DaemonState, log?: DaemonLog, onRoom?: RoomCycleListener, onHarvest?: RunOptions['onHarvest']): Promise<{
+    outcome: CycleOutcome;
+    resolved: ResolvedInterval;
+}>;
 /**
  * Compute the `--since` argument for a kakaocli call.
  *
@@ -95,7 +100,7 @@ export interface RunOptions {
      * but before the sleep + health check). Used by foreground UIs to
      * stream a "cycle finished, sleeping N s" footer.
      */
-    onCycle?: (outcome: CycleOutcome) => void;
+    onCycle?: (outcome: CycleOutcome, resolvedInterval?: ResolvedInterval) => void;
     /**
      * When true the loop exits cleanly on health-check failure rather
      * than calling `process.exit(1)`. Foreground mode opts in so the
@@ -103,6 +108,15 @@ export interface RunOptions {
      * so KeepAlive recycles the process.
      */
     exit_on_health_failure?: boolean;
+    /**
+     * Called when a harvest --scroll is triggered or skipped (rate limited).
+     * Foreground UIs use this to surface harvest events to the user.
+     */
+    onHarvest?: (info: {
+        roomName: string;
+        reason: HarvestReason;
+        code?: number;
+    }) => void;
 }
 /**
  * Long-running entry point — the loop body shared by `daemon` (launchd

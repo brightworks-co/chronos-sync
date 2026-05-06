@@ -510,3 +510,75 @@ describe('runCycle harvest integration', () => {
     expect(harvestEvents[0].code).toBe(0)
   })
 })
+
+describe('runCycle — client-side post-filter (kakaocli --since not honored)', () => {
+  const mkMsg = (id: number, ts: number, text = `m${id}`): KakaoCliMessage => ({
+    chat_id: 1,
+    id,
+    sender: '홍길동',
+    sender_id: 1,
+    text,
+    timestamp: ts,
+    is_from_me: false,
+    type: 'text',
+  })
+
+  it('skips upload when every kakaocli message is older than the cursor', async () => {
+    const cursor = Date.UTC(2026, 3, 26, 1, 0, 0)
+    const olderTs1 = Date.UTC(2026, 3, 26, 0, 0, 0)
+    const olderTs2 = Date.UTC(2026, 3, 26, 0, 30, 0)
+    vi.mocked(listMessages).mockResolvedValue([mkMsg(1, olderTs1), mkMsg(2, olderTs2)])
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: cursor,
+      last_success_at: 1,
+      consecutive_failures: 0,
+    }
+
+    const { outcome } = await runCycle(baseConfig, state, () => {})
+
+    expect(outcome.uploaded_rooms).toBe(0)
+    expect(outcome.failed_rooms).toBe(0)
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.last_synced_ms).toBe(cursor)
+    expect(after.consecutive_failures).toBe(0)
+  })
+
+  it('uploads only messages newer than cursor and advances cursor to filtered max', async () => {
+    const cursor = Date.UTC(2026, 3, 26, 1, 0, 0)
+    const olderTs = Date.UTC(2026, 3, 26, 0, 0, 0)
+    const newerTs1 = Date.UTC(2026, 3, 26, 2, 0, 0)
+    const newerTs2 = Date.UTC(2026, 3, 26, 3, 0, 0)
+    vi.mocked(listMessages).mockResolvedValue([
+      mkMsg(1, olderTs, 'old'),
+      mkMsg(2, newerTs1, 'new1'),
+      mkMsg(3, newerTs2, 'new2'),
+    ])
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: cursor,
+      last_success_at: 1,
+      consecutive_failures: 0,
+    }
+
+    const { outcome } = await runCycle(baseConfig, state, () => {})
+
+    expect(outcome.uploaded_rooms).toBe(1)
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.last_synced_ms).toBe(newerTs2)
+  })
+
+  it('does not skip when cursor is 0 (first cycle bootstraps with all messages)', async () => {
+    const ts1 = Date.UTC(2026, 3, 26, 0, 0, 0)
+    const ts2 = Date.UTC(2026, 3, 26, 0, 5, 0)
+    vi.mocked(listMessages).mockResolvedValue([mkMsg(1, ts1), mkMsg(2, ts2)])
+    const state = emptyState()
+    // last_synced_ms left at 0 (default)
+
+    const { outcome } = await runCycle(baseConfig, state, () => {})
+
+    expect(outcome.uploaded_rooms).toBe(1)
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.last_synced_ms).toBe(ts2)
+  })
+})
