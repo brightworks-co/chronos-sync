@@ -49,6 +49,22 @@ export interface ResolveSenderOptions {
  */
 export declare function resolveSenderNames(senderIds: ReadonlyArray<number | string>, options?: ResolveSenderOptions): Promise<Map<string, string>>;
 /**
+ * Build the SQLite query that resolves a comma-separated `userId IN (…)`
+ * list to display names.
+ *
+ * `NULLIF(col, '')` wraps every candidate so empty strings — common for
+ * `mp.displayName` in open chats where the multi-profile slot exists but
+ * is unset — are treated as missing. Without NULLIF, COALESCE picks the
+ * empty string as the first non-NULL value and the row resolves to an
+ * empty name, forcing the `참여자_<id>` fallback even when `nickName` has
+ * a perfectly good value.
+ *
+ * Exported so the caller (`resolveSenderNames`) and the test suite share
+ * exactly the same statement — regression tests assert the NULLIF wrap
+ * stays in place.
+ */
+export declare function buildResolverSql(idsClause: string): string;
+/**
  * Parse `kakaocli query` JSON output. The current shape (verified
  * 2026-05-06) is `[[col1, col2, ...], ...]` — a 2-D array where each row
  * is a tuple of column values in the order they appear in the SELECT.
