@@ -59,12 +59,7 @@ export async function resolveSenderNames(
   if (ids.length === 0) return new Map()
 
   const idsClause = ids.join(',')
-  const sql =
-    'SELECT u.userId, ' +
-    'COALESCE(mp.displayName, u.friendNickName, u.nickName, u.displayName) AS name ' +
-    'FROM NTUser u ' +
-    'LEFT JOIN NTMultiProfile mp ON mp.userId = u.userId AND mp.linkId = u.linkId ' +
-    `WHERE u.userId IN (${idsClause})`
+  const sql = buildResolverSql(idsClause)
 
   const binary = options.binary ?? 'kakaocli'
   const { stdout, stderr, code } = await runChild(binary, ['query', sql])
@@ -75,6 +70,31 @@ export async function resolveSenderNames(
   }
 
   return parseQueryRows(stdout)
+}
+
+/**
+ * Build the SQLite query that resolves a comma-separated `userId IN (…)`
+ * list to display names.
+ *
+ * `NULLIF(col, '')` wraps every candidate so empty strings — common for
+ * `mp.displayName` in open chats where the multi-profile slot exists but
+ * is unset — are treated as missing. Without NULLIF, COALESCE picks the
+ * empty string as the first non-NULL value and the row resolves to an
+ * empty name, forcing the `참여자_<id>` fallback even when `nickName` has
+ * a perfectly good value.
+ *
+ * Exported so the caller (`resolveSenderNames`) and the test suite share
+ * exactly the same statement — regression tests assert the NULLIF wrap
+ * stays in place.
+ */
+export function buildResolverSql(idsClause: string): string {
+  return (
+    'SELECT u.userId, ' +
+    "COALESCE(NULLIF(mp.displayName, ''), NULLIF(u.friendNickName, ''), NULLIF(u.nickName, ''), NULLIF(u.displayName, '')) AS name " +
+    'FROM NTUser u ' +
+    'LEFT JOIN NTMultiProfile mp ON mp.userId = u.userId AND mp.linkId = u.linkId ' +
+    `WHERE u.userId IN (${idsClause})`
+  )
 }
 
 /**
