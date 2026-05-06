@@ -10,6 +10,7 @@
 import { configPath } from './state-file.js'
 import { VERSION } from './constants.js'
 import type { DaemonConfig, RoomConfig } from './types.js'
+import type { ResolvedInterval } from './interval-resolver.js'
 
 export const ANSI = {
   reset: '\x1b[0m',
@@ -24,6 +25,7 @@ export interface PrintHeaderInputs {
   config: DaemonConfig
   configPath: string
   version: string
+  resolved?: ResolvedInterval
 }
 
 /** Build the startup banner shown when foreground mode boots. */
@@ -35,12 +37,21 @@ export function formatHeader(inputs: PrintHeaderInputs): string {
   lines.push(
     `${ANSI.dim}룸:${ANSI.reset}     ${inputs.config.rooms.length}개 매핑 — ${formatRoomList(inputs.config.rooms)}`
   )
-  const minutes = inputs.config.interval_seconds / 60
+
+  const intervalSeconds = inputs.resolved?.value ?? inputs.config.interval_seconds
+  const source = inputs.resolved?.source
+  const minutes = intervalSeconds / 60
   const pretty =
     minutes >= 1 && Number.isInteger(minutes)
       ? `${minutes}분`
-      : `${inputs.config.interval_seconds}초`
-  lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화. 끄려면 Ctrl+C 또는 터미널 닫기.`)
+      : `${intervalSeconds}초`
+  const sourceTag = source ? ` (${source})` : ''
+  lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`)
+
+  if (inputs.resolved?.warning) {
+    lines.push(`${ANSI.yellow}! ${inputs.resolved.warning}${ANSI.reset}`)
+  }
+
   lines.push('─────────────────────────────────────────')
   return lines.join('\n') + '\n'
 }
@@ -101,7 +112,7 @@ function formatClock(d: Date): string {
 }
 
 export interface ForegroundUi {
-  printHeader: (cfg: DaemonConfig) => void
+  printHeader: (cfg: DaemonConfig, resolved?: ResolvedInterval) => void
   printCycleLine: (inputs: Omit<CycleLineInputs, 'now'>) => void
   printShutdown: () => void
   printWarning: (message: string) => void
@@ -114,8 +125,8 @@ export interface ForegroundUi {
  */
 export function createDefaultForegroundUi(): ForegroundUi {
   return {
-    printHeader: (cfg) => {
-      process.stdout.write(formatHeader({ config: cfg, configPath: configPath(), version: VERSION }))
+    printHeader: (cfg, resolved) => {
+      process.stdout.write(formatHeader({ config: cfg, configPath: configPath(), version: VERSION, resolved }))
     },
     printCycleLine: (inputs) => {
       process.stdout.write(formatCycleLine(inputs) + '\n')

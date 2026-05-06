@@ -6,6 +6,7 @@ import {
   ANSI,
 } from '../src/foreground-ui'
 import type { DaemonConfig, RoomConfig } from '../src/types'
+import type { ResolvedInterval } from '../src/interval-resolver'
 
 const baseRoom: RoomConfig = {
   chat_name: 'kakao A',
@@ -65,6 +66,51 @@ describe('formatHeader', () => {
     const cfg: DaemonConfig = { ...baseConfig, interval_seconds: 30 }
     const out = formatHeader({ config: cfg, configPath: '/x', version: '1' })
     expect(out).toContain('30초마다')
+  })
+
+  it('shows source tag when resolved is provided', () => {
+    const resolved: ResolvedInterval = {
+      value: 60,
+      source: 'server',
+      fetched_at: new Date().toISOString(),
+      warning: null,
+    }
+    const out = formatHeader({ config: baseConfig, configPath: '/x', version: '1', resolved })
+    expect(out).toContain('(server)')
+    expect(out).toContain('1분')
+  })
+
+  it('shows cached source tag', () => {
+    const resolved: ResolvedInterval = {
+      value: 120,
+      source: 'cached',
+      fetched_at: new Date().toISOString(),
+      warning: null,
+    }
+    const out = formatHeader({ config: baseConfig, configPath: '/x', version: '1', resolved })
+    expect(out).toContain('(cached)')
+  })
+
+  it('shows warning line when resolved has a warning', () => {
+    const resolved: ResolvedInterval = {
+      value: 300,
+      source: 'cached',
+      fetched_at: new Date().toISOString(),
+      warning: 'PAT 만료 감지 — web에서 갱신 필요',
+    }
+    const out = formatHeader({ config: baseConfig, configPath: '/x', version: '1', resolved })
+    expect(out).toContain('PAT 만료 감지')
+  })
+
+  it('shows default source tag', () => {
+    const resolved: ResolvedInterval = {
+      value: 300,
+      source: 'default',
+      fetched_at: new Date().toISOString(),
+      warning: null,
+    }
+    const out = formatHeader({ config: baseConfig, configPath: '/x', version: '1', resolved })
+    expect(out).toContain('(default)')
   })
 })
 

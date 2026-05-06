@@ -7,6 +7,15 @@ import { emptyState, getRoomState } from '../src/state-file'
 import type { DaemonConfig } from '../src/types'
 import type { KakaoCliMessage } from '../src/csv-reassemble'
 
+vi.mock('../src/interval-resolver', () => ({
+  resolveInterval: vi.fn().mockResolvedValue({
+    value: 60,
+    source: 'config',
+    fetched_at: new Date().toISOString(),
+    warning: null,
+  }),
+}))
+
 vi.mock('../src/kakaocli', () => ({
   listMessages: vi.fn(),
 }))
@@ -76,7 +85,7 @@ describe('runCycle', () => {
     vi.mocked(listMessages).mockResolvedValue([])
     const state = emptyState()
 
-    const outcome = await runCycle(baseConfig, state, () => {})
+    const { outcome } = await runCycle(baseConfig, state, () => {})
 
     expect(outcome.uploaded_rooms).toBe(0)
     expect(outcome.failed_rooms).toBe(0)
@@ -117,7 +126,7 @@ describe('runCycle', () => {
       consecutive_failures: 3,
     }
 
-    const outcome = await runCycle(baseConfig, state, () => {})
+    const { outcome } = await runCycle(baseConfig, state, () => {})
 
     expect(outcome.uploaded_rooms).toBe(1)
     expect(outcome.failed_rooms).toBe(0)
@@ -171,12 +180,24 @@ describe('runCycle', () => {
       consecutive_failures: 1,
     }
 
-    const outcome = await runCycle(baseConfig, state, () => {})
+    const { outcome } = await runCycle(baseConfig, state, () => {})
 
     expect(outcome.failed_rooms).toBe(1)
     const cursor = getRoomState(state, 'p1', 'room-a')
     expect(cursor.last_synced_ms).toBe(1000)
     expect(cursor.consecutive_failures).toBe(2)
+  })
+
+  it('increments cycle_index on each runCycle call', async () => {
+    vi.mocked(listMessages).mockResolvedValue([])
+    const state = emptyState()
+    expect(state.daemon.cycle_index).toBe(0)
+
+    await runCycle(baseConfig, state, () => {})
+    expect(state.daemon.cycle_index).toBe(1)
+
+    await runCycle(baseConfig, state, () => {})
+    expect(state.daemon.cycle_index).toBe(2)
   })
 
   it('updates daemon.last_cycle_at and persists state to disk', async () => {
