@@ -16,6 +16,7 @@
  *   health                Health check verdict.
  *   interval <seconds>    Set sync interval via web KV PUT (10~3600).
  *   interval --get        Show current sync interval from web KV.
+ *   diagnose senders [chat]  Inspect 참여자_<id> fallback for a configured room.
  *   version               Print version.
  */
 
@@ -79,6 +80,20 @@ switch (cmd) {
     })
     break
 
+  case 'diagnose':
+    if (args[0] !== 'senders') {
+      process.stderr.write('지원되는 진단: chronos-sync diagnose senders [<chat-name | chat-id>]\n')
+      process.exit(1)
+    }
+    import('../src/cli/diagnose-senders.js').then(async (m) => {
+      const result = await m.runDiagnoseSenders(args[1])
+      process.exit(result.exitCode)
+    }).catch((err: unknown) => {
+      process.stderr.write('chronos-sync: diagnose error: ' + String(err) + '\n')
+      process.exit(1)
+    })
+    break
+
   case 'health':
     import('../src/state-file.js').then(async (stateModule) => {
       const { checkHealth } = await import('../src/health.js')
@@ -123,6 +138,7 @@ function printUsage(): void {
   health                    헬스 체크 결과 (JSON)
   interval <초>             동기화 주기 변경 (10~3600). 데몬 다음 cycle 자동 반영.
   interval --get            현재 동기화 주기 조회 (web KV 기준).
+  diagnose senders [chat]   참여자_<id> 폴백 원인 분석 (특정 룸의 sender_id 별 NTUser 매칭)
   daemon                    백그라운드 루프 (launchd 전용, 일반 사용자 비권장)
   version                   버전 표시
   help                      도움말 표시
