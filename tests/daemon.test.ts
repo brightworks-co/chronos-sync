@@ -380,10 +380,10 @@ describe('enrichSenders', () => {
     expect(out[0].sender).toBe('핑님')
   })
 
-  it('falls back to 참여자_<id> when name not found', async () => {
+  it('leaves sender as null when name not found (caller holds back the cycle — no 참여자_<id> ever sent)', async () => {
     vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
     const out = await enrichSenders([row({ sender_id: 999 })], undefined, () => {})
-    expect(out[0].sender).toBe('참여자_999')
+    expect(out[0].sender).toBeNull()
   })
 
   it('preserves a non-null sender as-is', async () => {
@@ -405,7 +405,7 @@ describe('enrichSenders', () => {
     expect(out[0].sender).toBe('나')
   })
 
-  it('logs and falls back when resolveSenderNames throws', async () => {
+  it('logs and leaves sender null when resolveSenderNames throws (caller will hold back the cycle)', async () => {
     vi.mocked(resolveSenderNames).mockRejectedValue(new Error('binary missing'))
     const logs: Array<{ level: string; msg: string }> = []
     const out = await enrichSenders(
@@ -413,7 +413,7 @@ describe('enrichSenders', () => {
       undefined,
       (level, msg) => logs.push({ level, msg })
     )
-    expect(out[0].sender).toBe('참여자_9999')
+    expect(out[0].sender).toBeNull()
     expect(logs.some((l) => l.level === 'warn' && l.msg.includes('sender resolver'))).toBe(true)
   })
 })
@@ -580,5 +580,91 @@ describe('runCycle — client-side post-filter (kakaocli --since not honored)', 
     expect(outcome.uploaded_rooms).toBe(1)
     const after = getRoomState(state, 'p1', 'room-a')
     expect(after.last_synced_ms).toBe(ts2)
+  })
+})
+
+describe('runCycle — strict skip on unresolved senders (no 참여자_<id> ever sent)', () => {
+  const mkMsgNullSender = (id: number, ts: number, sender_id: number): KakaoCliMessage => ({
+    chat_id: 1,
+    id,
+    sender: null,
+    sender_id,
+    text: `m${id}`,
+    timestamp: ts,
+    is_from_me: false,
+    type: 'text',
+  })
+
+  it('holds back the entire cycle when a single sender_id cannot be resolved, leaving the cursor untouched', async () => {
+    const cursor = Date.UTC(2026, 3, 26, 0, 0, 0)
+    const ts1 = Date.UTC(2026, 3, 26, 0, 5, 0)
+    const ts2 = Date.UTC(2026, 3, 26, 0, 6, 0)
+    vi.mocked(listMessages).mockResolvedValue([
+      mkMsgNullSender(1, ts1, 111),
+      mkMsgNullSender(2, ts2, 222),
+    ])
+    // 111 resolves, 222 does NOT — cycle must skip everything.
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['111', '핑님']]))
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: cursor,
+      last_success_at: 1,
+      consecutive_failures: 0,
+    }
+    const logs: Array<{ level: string; msg: string }> = []
+
+    const { outcome } = await runCycle(baseConfig, state, (level, msg) =>
+      logs.push({ level, msg })
+    )
+
+    expect(outcome.uploaded_rooms).toBe(0)
+    expect(outcome.failed_rooms).toBe(0)
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.last_synced_ms).toBe(cursor)
+    expect(after.consecutive_stuck_cycles).toBe(1)
+    expect(
+      logs.some((l) => l.level === 'warn' && l.msg.includes('unresolved senders'))
+    ).toBe(true)
+  })
+
+  it('increments consecutive_stuck_cycles each held-back cycle and resets to 0 on a clean cycle', async () => {
+    const cursor = Date.UTC(2026, 3, 26, 0, 0, 0)
+    const ts1 = Date.UTC(2026, 3, 26, 0, 5, 0)
+    vi.mocked(listMessages).mockResolvedValue([mkMsgNullSender(1, ts1, 555)])
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: cursor,
+      last_success_at: 1,
+      consecutive_failures: 0,
+    }
+
+    await runCycle(baseConfig, state, () => {})
+    expect(getRoomState(state, 'p1', 'room-a').consecutive_stuck_cycles).toBe(1)
+
+    await runCycle(baseConfig, state, () => {})
+    expect(getRoomState(state, 'p1', 'room-a').consecutive_stuck_cycles).toBe(2)
+
+    // Third cycle: 555 finally resolves → counter resets, cursor advances.
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['555', '뒤늦게-resolved']]))
+
+    await runCycle(baseConfig, state, () => {})
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.consecutive_stuck_cycles).toBe(0)
+    expect(after.last_synced_ms).toBe(ts1)
+  })
+
+  it('uploads cleanly when every sender resolves (no held-back path triggered)', async () => {
+    const ts1 = Date.UTC(2026, 3, 26, 0, 5, 0)
+    vi.mocked(listMessages).mockResolvedValue([mkMsgNullSender(1, ts1, 777)])
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['777', '잘-resolved']]))
+    const state = emptyState()
+
+    const { outcome } = await runCycle(baseConfig, state, () => {})
+
+    expect(outcome.uploaded_rooms).toBe(1)
+    const after = getRoomState(state, 'p1', 'room-a')
+    expect(after.last_synced_ms).toBe(ts1)
+    expect(after.consecutive_stuck_cycles).toBe(0)
   })
 })

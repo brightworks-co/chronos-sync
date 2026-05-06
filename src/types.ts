@@ -93,6 +93,15 @@ export interface RoomState {
   consecutive_failures: number
   /** Wall-clock timestamp of the last kakaocli harvest --scroll call (epoch ms). 0 = never called. */
   last_harvest_at?: number
+  /**
+   * Number of consecutive cycles that were held back because at least one
+   * `sender_id` could not be resolved to a display name. Reset to 0 when
+   * a cycle uploads cleanly. The daemon never sends `참여자_<id>` to the
+   * server; instead the whole cycle is skipped and the cursor stays put,
+   * waiting for KakaoTalk to populate `NTUser`. This counter exists so
+   * operators can detect senders that are stuck unresolvable indefinitely.
+   */
+  consecutive_stuck_cycles?: number
 }
 
 export type IntervalSource = 'server' | 'cached' | 'config' | 'default'
