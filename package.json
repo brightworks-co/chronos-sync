@@ -1,6 +1,6 @@
 {
   "name": "@brightworks/chronos-sync",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0",
   "description": "Mac KakaoTalk sync daemon for Chronos",
   "type": "module",
   "license": "MIT",
@@ -9,12 +9,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/brightworks-co/chronos-sync.git"
+    "url": "git+https://github.com/brightworks-co/chronos-sync.git"
   },
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "bin": {
-    "chronos-sync": "./bin.js"
+    "chronos-sync": "bin.js"
   },
   "exports": {
     ".": {
