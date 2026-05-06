@@ -20,7 +20,7 @@
  */
 
 import { reassembleMacCsv, type KakaoCliMessage } from './csv-reassemble.js'
-import { listMessages } from './kakaocli.js'
+import { listMessages, harvestScroll } from './kakaocli.js'
 import { parseExport } from './parser/index.js'
 import { resolveSenderNames } from './sender-resolver.js'
 import { Uploader, UploadError } from './uploader.js'
@@ -36,6 +36,8 @@ import {
 } from './state-file.js'
 import { resolveInterval, type ResolvedInterval } from './interval-resolver.js'
 import type { DaemonConfig, DaemonState, RoomConfig } from './types.js'
+import { DEFAULT_HARVEST_MAX_PAGES } from './types.js'
+import { detectHarvest, type HarvestReason } from './harvest-detector.js'
 
 interface CycleOutcome {
   /** Number of rooms with new messages uploaded this cycle. */
@@ -75,7 +77,8 @@ export async function runCycle(
   cfg: DaemonConfig,
   state: DaemonState,
   log: DaemonLog = defaultLog,
-  onRoom?: RoomCycleListener
+  onRoom?: RoomCycleListener,
+  onHarvest?: RunOptions['onHarvest']
 ): Promise<{ outcome: CycleOutcome; resolved: ResolvedInterval }> {
   state.daemon.cycle_index += 1
   const resolved = await resolveInterval(cfg, state, { now: Date.now, log })
@@ -85,7 +88,7 @@ export async function runCycle(
 
   for (const room of cfg.rooms) {
     try {
-      const newCount = await syncRoom(cfg, state, room, log)
+      const newCount = await syncRoom(cfg, state, room, log, onHarvest)
       if (newCount > 0) uploaded_rooms += 1
       onRoom?.({ room, new_messages: newCount })
     } catch (err) {
@@ -151,10 +154,53 @@ async function syncRoom(
   cfg: DaemonConfig,
   state: DaemonState,
   room: RoomConfig,
-  log: DaemonLog
+  log: DaemonLog,
+  onHarvest?: RunOptions['onHarvest']
 ): Promise<number> {
   const cursor = getRoomState(state, room.project_id, room.room_name)
-  const since = computeSince(cfg, cursor)
+
+  const decision = detectHarvest({
+    config: cfg,
+    state,
+    roomState: cursor,
+    now: Date.now(),
+    cycleIndex: state.daemon.cycle_index,
+  })
+
+  if (decision.trigger && (room.chat_name !== undefined || room.chat_id !== undefined)) {
+    log('info', 'harvest --scroll triggered', {
+      room_name: room.room_name,
+      reason: decision.reason,
+    })
+    const harvest = await harvestScroll({
+      chat: room.chat_id !== undefined ? undefined : room.chat_name,
+      chatId: room.chat_id,
+      binary: cfg.kakaocli_path,
+      maxPages: cfg.harvest?.max_pages ?? DEFAULT_HARVEST_MAX_PAGES,
+    })
+    if (harvest.code !== 0) {
+      log('warn', 'harvest --scroll non-zero exit (continuing)', {
+        room_name: room.room_name,
+        code: harvest.code,
+        stderr: harvest.stderr.slice(0, 200),
+      })
+    }
+    // mark last_harvest_at regardless of code (rate limit gates retries)
+    setRoomState(state, room.project_id, room.room_name, {
+      ...cursor,
+      last_harvest_at: Date.now(),
+    })
+    onHarvest?.({ roomName: room.room_name, reason: decision.reason, code: harvest.code })
+  } else if (decision.reason === 'rate_limited_skip') {
+    log('info', 'harvest --scroll skipped (rate limited)', {
+      room_name: room.room_name,
+    })
+    onHarvest?.({ roomName: room.room_name, reason: 'rate_limited_skip' })
+  }
+
+  // Re-read cursor after possible last_harvest_at update
+  const updatedCursor = getRoomState(state, room.project_id, room.room_name)
+  const since = computeSince(cfg, updatedCursor)
 
   const messages = await listMessages({
     chat: room.chat_id !== undefined ? undefined : room.chat_name,
@@ -200,9 +246,10 @@ async function syncRoom(
   const lastTs = messages.reduce((max, m) => {
     const t = typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp)
     return Number.isFinite(t) && t > max ? t : max
-  }, cursor.last_synced_ms)
+  }, updatedCursor.last_synced_ms)
 
   setRoomState(state, room.project_id, room.room_name, {
+    ...updatedCursor,
     last_synced_ms: lastTs,
     last_success_at: Date.now(),
     consecutive_failures: 0,
@@ -290,6 +337,11 @@ export interface RunOptions {
    * so KeepAlive recycles the process.
    */
   exit_on_health_failure?: boolean
+  /**
+   * Called when a harvest --scroll is triggered or skipped (rate limited).
+   * Foreground UIs use this to surface harvest events to the user.
+   */
+  onHarvest?: (info: { roomName: string; reason: HarvestReason; code?: number }) => void
 }
 
 /**
@@ -341,7 +393,7 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   while (!shuttingDown) {
     let resolved: ResolvedInterval | undefined
     try {
-      const result = await runCycle(cfg, state, log, options.onRoom)
+      const result = await runCycle(cfg, state, log, options.onRoom, options.onHarvest)
       resolved = result.resolved
       options.onCycle?.(result.outcome, resolved)
     } catch (err) {

@@ -22,6 +22,7 @@ import {
   type DaemonState,
   type RoomState,
   type SinceOverride,
+  type HarvestThresholds,
   DEFAULT_INTERVAL_SECONDS,
   MIN_INTERVAL_SECONDS,
   MAX_INTERVAL_SECONDS,
@@ -74,6 +75,7 @@ export async function loadConfig(): Promise<DaemonConfig> {
 
   const interval = clampInterval(parsed.interval_seconds ?? DEFAULT_INTERVAL_SECONDS)
   const since = normalizeSinceOverride(parsed.since)
+  const harvest = normalizeHarvestThresholds(parsed.harvest)
 
   return {
     server_url: parsed.server_url.replace(/\/+$/, ''),
@@ -81,6 +83,7 @@ export async function loadConfig(): Promise<DaemonConfig> {
     interval_seconds: interval,
     kakaocli_path: parsed.kakaocli_path,
     since,
+    harvest,
     rooms: normalizedRooms,
   }
 }
@@ -109,6 +112,25 @@ function normalizeSinceOverride(value: unknown): SinceOverride | undefined {
       throw new Error('config.since.override_seconds must be a non-negative finite number')
     }
     out.override_seconds = Math.floor(o)
+  }
+  return out
+}
+
+function normalizeHarvestThresholds(value: unknown): HarvestThresholds | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object') {
+    throw new Error('config.harvest must be an object when present')
+  }
+  const raw = value as Record<string, unknown>
+  const out: HarvestThresholds = {}
+  for (const k of ['gap_seconds', 'startup_seconds', 'rate_limit_seconds', 'max_pages'] as const) {
+    if (raw[k] !== undefined) {
+      const v = raw[k]
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+        throw new Error(`config.harvest.${k} must be a non-negative finite number`)
+      }
+      out[k] = Math.floor(v)
+    }
   }
   return out
 }
@@ -196,6 +218,7 @@ export function getRoomState(state: DaemonState, projectId: string, roomName: st
       last_synced_ms: 0,
       last_success_at: 0,
       consecutive_failures: 0,
+      last_harvest_at: 0,
     }
   )
 }

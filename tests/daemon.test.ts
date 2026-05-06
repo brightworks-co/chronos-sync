@@ -18,6 +18,7 @@ vi.mock('../src/interval-resolver', () => ({
 
 vi.mock('../src/kakaocli', () => ({
   listMessages: vi.fn(),
+  harvestScroll: vi.fn(),
 }))
 
 vi.mock('../src/sender-resolver', () => ({
@@ -45,7 +46,7 @@ vi.mock('../src/uploader', () => {
   }
 })
 
-import { listMessages } from '../src/kakaocli'
+import { listMessages, harvestScroll } from '../src/kakaocli'
 import { resolveSenderNames } from '../src/sender-resolver'
 
 let realHome: string | undefined
@@ -57,6 +58,9 @@ beforeEach(async () => {
   await fs.mkdir(join(tmp, '.chronos'), { recursive: true })
   vi.resetAllMocks()
   vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
+  // harvestScroll is called when last_synced_ms=0 on cycle 1 (startup_old).
+  // Default it to a no-op so existing tests aren't disrupted.
+  vi.mocked(harvestScroll).mockResolvedValue({ code: 0, stderr: '' })
 })
 
 afterEach(async () => {
@@ -411,5 +415,98 @@ describe('enrichSenders', () => {
     )
     expect(out[0].sender).toBe('참여자_9999')
     expect(logs.some((l) => l.level === 'warn' && l.msg.includes('sender resolver'))).toBe(true)
+  })
+})
+
+describe('runCycle harvest integration', () => {
+  const NOW = Date.UTC(2026, 3, 26, 12, 0, 0)
+
+  beforeEach(() => {
+    vi.mocked(harvestScroll).mockResolvedValue({ code: 0, stderr: '' })
+    vi.mocked(listMessages).mockResolvedValue([])
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('calls harvestScroll on cycle 1 when last_synced_ms is stale (startup_old)', async () => {
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+
+    await runCycle(baseConfig, state, () => {})
+
+    expect(harvestScroll).toHaveBeenCalledTimes(1)
+    const call = vi.mocked(harvestScroll).mock.calls[0][0]
+    expect(call.chat).toBe('kakao chat A')
+  })
+
+  it('does not call harvestScroll when decision is null', async () => {
+    const state = emptyState()
+    // cycle_index starts at 0, incremented to 1 inside runCycle → startup check applies
+    // but last_synced_ms is only 1h ago, well within 24h startup threshold
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 1 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+
+    await runCycle(baseConfig, state, () => {})
+
+    expect(harvestScroll).not.toHaveBeenCalled()
+  })
+
+  it('sets last_harvest_at after harvestScroll is called', async () => {
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+
+    await runCycle(baseConfig, state, () => {})
+
+    const cursor = getRoomState(state, 'p1', 'room-a')
+    expect(cursor.last_harvest_at).toBeGreaterThan(0)
+    expect(cursor.last_harvest_at).toBe(NOW)
+  })
+
+  it('logs warn and continues sync when harvestScroll returns non-zero code', async () => {
+    vi.mocked(harvestScroll).mockResolvedValue({ code: 1, stderr: 'harvest error' })
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+    const logs: Array<{ level: string; msg: string }> = []
+
+    await runCycle(baseConfig, state, (level, msg) => logs.push({ level, msg }))
+
+    expect(logs.some((l) => l.level === 'warn' && l.msg.includes('non-zero'))).toBe(true)
+    expect(listMessages).toHaveBeenCalled()
+  })
+
+  it('invokes onHarvest callback with trigger info', async () => {
+    const state = emptyState()
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+    const harvestEvents: Array<{ roomName: string; reason: string | null; code?: number }> = []
+
+    await runCycle(baseConfig, state, () => {}, undefined, (info) => harvestEvents.push(info))
+
+    expect(harvestEvents).toHaveLength(1)
+    expect(harvestEvents[0].roomName).toBe('room-a')
+    expect(harvestEvents[0].reason).toBe('startup_old')
+    expect(harvestEvents[0].code).toBe(0)
   })
 })

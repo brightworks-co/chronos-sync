@@ -73,26 +73,89 @@ export async function listMessages(
   return lines.map((l) => JSON.parse(l) as KakaoCliMessage)
 }
 
+export interface HarvestQuery {
+  /** kakaocli chat display name. Mutually exclusive with `chatId`. */
+  chat?: string
+  /** kakaocli chat numeric id. */
+  chatId?: string | number
+  /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
+  binary?: string
+  /** Max scroll pages. Default 5. Passed as `--max-pages <n>`. */
+  maxPages?: number
+  /** Spawn timeout in ms. Default 60000. */
+  timeoutMs?: number
+}
+
+export interface HarvestResult {
+  code: number
+  stderr: string
+}
+
+/**
+ * Invoke `kakaocli harvest --scroll [--chat <name> | --chat-id <id>] [--max-pages <n>]`.
+ * Best-effort: always resolves (never throws) so the caller can warn-log and continue normal sync.
+ */
+export async function harvestScroll(query: HarvestQuery): Promise<HarvestResult> {
+  const binary = query.binary ?? 'kakaocli'
+  const args = ['harvest', '--scroll']
+  if (query.chatId !== undefined) {
+    args.push('--chat-id', String(query.chatId))
+  } else if (query.chat !== undefined) {
+    args.push('--chat', query.chat)
+  } else {
+    throw new Error('harvestScroll requires `chat` or `chatId`')
+  }
+  if (query.maxPages !== undefined) {
+    args.push('--max-pages', String(query.maxPages))
+  }
+
+  const timeoutMs = query.timeoutMs ?? 60_000
+  const { stderr, code } = await runChild(binary, args, timeoutMs)
+  return { code, stderr }
+}
+
 interface ChildResult {
   stdout: string
   stderr: string
   code: number
 }
 
-function runChild(binary: string, args: string[]): Promise<ChildResult> {
+function runChild(binary: string, args: string[], timeoutMs?: number): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const settle = (result: ChildResult) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resolve(result)
+    }
+
     child.stdout.on('data', (d: Buffer) => {
       stdout += d.toString('utf8')
     })
     child.stderr.on('data', (d: Buffer) => {
       stderr += d.toString('utf8')
     })
-    child.on('error', (err) => reject(err))
-    child.on('close', (code) => {
-      resolve({ stdout, stderr, code: code ?? -1 })
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      reject(err)
     })
+    child.on('close', (code) => {
+      settle({ stdout, stderr, code: code ?? -1 })
+    })
+
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        settle({ stdout, stderr, code: -1 })
+      }, timeoutMs)
+    }
   })
 }
