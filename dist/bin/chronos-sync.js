@@ -1,0 +1,164 @@
+#!/usr/bin/env node
+/**
+ * chronos-sync CLI entry point.
+ *
+ * Default invocation (`chronos-sync` with no args) runs the foreground
+ * mode: a pretty-printed loop the user keeps open in a terminal.
+ * Hitting Ctrl+C — or just closing the terminal — releases the lock
+ * and exits cleanly.
+ *
+ * Subcommands:
+ *   (none) | run | start  Foreground mode (default — the user-facing entry).
+ *   daemon                Background loop for launchd. Deprecated for human use;
+ *                         retained so existing launchd plists keep working.
+ *   daemon --status       Raw JSON daemon snapshot (internal).
+ *   status                Pretty per-room sync status (one-shot).
+ *   health                Health check verdict.
+ *   version               Print version.
+ */
+import { VERSION } from '../src/constants.js';
+const [, , cmd, ...args] = process.argv;
+switch (cmd) {
+    case undefined:
+    case 'run':
+    case 'start':
+        runForeground();
+        break;
+    case 'daemon':
+        if (args.includes('--status')) {
+            import('../src/state-file.js').then(async (m) => {
+                const state = await m.loadState();
+                const started = state.daemon.started_at
+                    ? new Date(state.daemon.started_at).toISOString()
+                    : 'never';
+                const lastCycle = state.daemon.last_cycle_at
+                    ? new Date(state.daemon.last_cycle_at).toISOString()
+                    : 'never';
+                process.stdout.write(JSON.stringify({ started_at: started, last_cycle_at: lastCycle, rooms: state.rooms }, null, 2) + '\n');
+            }).catch((err) => {
+                process.stderr.write('chronos-sync: status error: ' + String(err) + '\n');
+                process.exit(1);
+            });
+        }
+        else {
+            process.stderr.write('\x1b[33m!\x1b[0m "chronos-sync daemon"은 launchd 호환용으로만 유지됩니다. ' +
+                '터미널에서 직접 사용하실 때는 인자 없이 "chronos-sync"를 실행하세요.\n');
+            import('../src/daemon.js').then((m) => m.main()).catch((err) => {
+                process.stderr.write('chronos-sync: daemon error: ' + String(err) + '\n');
+                process.exit(1);
+            });
+        }
+        break;
+    case 'status':
+        import('../src/cli/status.js').then((m) => m.runStatus()).catch((err) => {
+            process.stderr.write('chronos-sync: status error: ' + String(err) + '\n');
+            process.exit(1);
+        });
+        break;
+    case 'health':
+        import('../src/state-file.js').then(async (stateModule) => {
+            const { checkHealth } = await import('../src/health.js');
+            const state = await stateModule.loadState();
+            const verdict = checkHealth(state);
+            process.stdout.write(JSON.stringify(verdict, null, 2) + '\n');
+            if (!verdict.healthy) {
+                process.exit(1);
+            }
+        }).catch((err) => {
+            process.stderr.write('chronos-sync: health error: ' + String(err) + '\n');
+            process.exit(1);
+        });
+        break;
+    case 'version':
+    case '--version':
+    case '-v':
+        process.stdout.write(VERSION + '\n');
+        break;
+    case 'help':
+    case '--help':
+    case '-h':
+        printUsage();
+        break;
+    default:
+        process.stderr.write(`알 수 없는 명령: ${cmd}\n`);
+        printUsage();
+        process.exit(1);
+}
+function printUsage() {
+    process.stdout.write(`chronos-sync v${VERSION}
+
+기본 사용:
+  chronos-sync              터미널에서 동기화 시작 (Ctrl+C로 종료)
+
+명령어:
+  status                    설정 + 룸별 마지막 동기화 시각
+  health                    헬스 체크 결과 (JSON)
+  daemon                    백그라운드 루프 (launchd 전용, 일반 사용자 비권장)
+  version                   버전 표시
+  help                      도움말 표시
+`);
+}
+function runForeground() {
+    Promise.all([
+        import('../src/daemon.js'),
+        import('../src/foreground-ui.js'),
+    ])
+        .then(([daemon, ui]) => {
+        const view = ui.createDefaultForegroundUi();
+        // The header reads `cfg`, but `runLoop` also loads the config.
+        // We pre-load + print, then `runLoop` re-loads internally —
+        // simple and robust against a transient FS hiccup between the
+        // two loads (each call surfaces its own error message).
+        return import('../src/state-file.js').then(async ({ loadConfig }) => {
+            let bannerCfg;
+            try {
+                bannerCfg = await loadConfig();
+            }
+            catch (err) {
+                process.stderr.write('chronos-sync: config load error: ' +
+                    (err instanceof Error ? err.message : String(err)) +
+                    '\n');
+                process.exit(1);
+            }
+            view.printHeader(bannerCfg);
+            const runOptions = {
+                // Quiet logger: only surface warnings/errors so the cycle
+                // lines stay the primary signal. info-level events (config
+                // reload, startup) are intentionally swallowed in fg mode.
+                log: (level, msg, ctx) => {
+                    if (level === 'info')
+                        return;
+                    const prefix = level === 'warn' ? '\x1b[33m!\x1b[0m' : '\x1b[31m!\x1b[0m';
+                    const ctxText = ctx ? ' ' + JSON.stringify(ctx) : '';
+                    process.stderr.write(`${prefix} ${msg}${ctxText}\n`);
+                },
+                onRoom: (result) => {
+                    view.printCycleLine({
+                        room: result.room,
+                        new_messages: result.new_messages,
+                        error: result.error,
+                    });
+                },
+                // exit_on_health_failure stays false → the loop keeps trying;
+                // the user can Ctrl+C if it's truly stuck.
+            };
+            // Hook Ctrl+C / terminal close to the friendly farewell. The
+            // daemon module also installs SIGINT/SIGTERM handlers that
+            // release the lock + exit, so this handler must run *first*
+            // (process.on stacks listeners — first registered runs first).
+            const farewell = () => {
+                view.printShutdown();
+            };
+            process.on('SIGINT', farewell);
+            process.on('SIGTERM', farewell);
+            process.on('SIGHUP', farewell);
+            await daemon.runLoop(runOptions);
+        });
+    })
+        .catch((err) => {
+        process.stderr.write('chronos-sync: foreground error: ' +
+            (err instanceof Error ? err.message : String(err)) +
+            '\n');
+        process.exit(1);
+    });
+}

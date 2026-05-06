@@ -1,0 +1,130 @@
+/**
+ * Pretty console output for the foreground `chronos-sync` mode.
+ *
+ * The mental model is "open a terminal, see live status, close terminal
+ * to stop". So output is conversational Korean, time-stamped, color-cued
+ * (green ✓ for success / red ✗ for error). No JSONL — that stream is
+ * available via `chronos-sync daemon` for log-aggregation pipelines.
+ */
+
+import { configPath } from './state-file.js'
+import { VERSION } from './constants.js'
+import type { DaemonConfig, RoomConfig } from './types.js'
+
+export const ANSI = {
+  reset: '\x1b[0m',
+  green: '\x1b[32m',
+  red: '\x1b[31m',
+  yellow: '\x1b[33m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+} as const
+
+export interface PrintHeaderInputs {
+  config: DaemonConfig
+  configPath: string
+  version: string
+}
+
+/** Build the startup banner shown when foreground mode boots. */
+export function formatHeader(inputs: PrintHeaderInputs): string {
+  const lines: string[] = []
+  lines.push(`${ANSI.bold}chronos-sync${ANSI.reset} v${inputs.version}`)
+  lines.push(`${ANSI.dim}config:${ANSI.reset} ${inputs.configPath}`)
+  lines.push(`${ANSI.dim}서버:${ANSI.reset}   ${inputs.config.server_url}`)
+  lines.push(
+    `${ANSI.dim}룸:${ANSI.reset}     ${inputs.config.rooms.length}개 매핑 — ${formatRoomList(inputs.config.rooms)}`
+  )
+  const minutes = inputs.config.interval_seconds / 60
+  const pretty =
+    minutes >= 1 && Number.isInteger(minutes)
+      ? `${minutes}분`
+      : `${inputs.config.interval_seconds}초`
+  lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화. 끄려면 Ctrl+C 또는 터미널 닫기.`)
+  lines.push('─────────────────────────────────────────')
+  return lines.join('\n') + '\n'
+}
+
+function formatRoomList(rooms: ReadonlyArray<RoomConfig>): string {
+  if (rooms.length === 0) return '(없음)'
+  return rooms
+    .map((r) => {
+      const projectShort = r.project_id.slice(0, 8)
+      const target = `${projectShort}/${r.room_name}`
+      const source = r.chat_id ?? r.chat_name ?? '(unknown)'
+      return `${source} → ${target}`
+    })
+    .join(', ')
+}
+
+export interface CycleLineInputs {
+  room: RoomConfig
+  new_messages: number
+  error?: string
+  /** Wall-clock at the moment the cycle line is emitted. */
+  now?: Date
+}
+
+/**
+ * Format a single per-room cycle result as a one-liner:
+ *
+ *   `21:38:05  ✓ ce3758/notice — 새 메시지 50개 업로드`
+ *   `21:38:06  ✗ ce3758/notice — kakaocli exited with code 1`
+ */
+export function formatCycleLine(inputs: CycleLineInputs): string {
+  const time = formatClock(inputs.now ?? new Date())
+  const projectShort = inputs.room.project_id.slice(0, 8)
+  const target = `${projectShort}/${inputs.room.room_name}`
+  if (inputs.error) {
+    return `${time}  ${ANSI.red}✗${ANSI.reset} ${target} — ${inputs.error}`
+  }
+  const tail =
+    inputs.new_messages > 0
+      ? `새 메시지 ${inputs.new_messages}개 업로드`
+      : '변동 없음'
+  return `${time}  ${ANSI.green}✓${ANSI.reset} ${target} — ${tail}`
+}
+
+/** Closing line shown when the user hits Ctrl+C. */
+export function formatShutdown(): string {
+  return (
+    '\n' +
+    `${ANSI.dim}종료. 다시 동기화하려면 ${ANSI.reset}${ANSI.bold}chronos-sync${ANSI.reset}${ANSI.dim}를 다시 실행하세요.${ANSI.reset}\n`
+  )
+}
+
+function formatClock(d: Date): string {
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
+
+export interface ForegroundUi {
+  printHeader: (cfg: DaemonConfig) => void
+  printCycleLine: (inputs: Omit<CycleLineInputs, 'now'>) => void
+  printShutdown: () => void
+  printWarning: (message: string) => void
+}
+
+/**
+ * Default foreground UI bound to `process.stdout`. Tests should build
+ * their own `ForegroundUi` against an in-memory writer instead of
+ * spying on stdout.
+ */
+export function createDefaultForegroundUi(): ForegroundUi {
+  return {
+    printHeader: (cfg) => {
+      process.stdout.write(formatHeader({ config: cfg, configPath: configPath(), version: VERSION }))
+    },
+    printCycleLine: (inputs) => {
+      process.stdout.write(formatCycleLine(inputs) + '\n')
+    },
+    printShutdown: () => {
+      process.stdout.write(formatShutdown())
+    },
+    printWarning: (message) => {
+      process.stderr.write(`${ANSI.yellow}!${ANSI.reset} ${message}\n`)
+    },
+  }
+}
