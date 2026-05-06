@@ -80,6 +80,17 @@ export interface RoomState {
   consecutive_failures: number
 }
 
+export type IntervalSource = 'server' | 'cached' | 'config' | 'default'
+
+export interface IntervalCache {
+  value: number
+  fetched_at: string
+  source: IntervalSource
+  consecutive_failures: number
+  /** Cycle counter (monotonic) at which the next fetch should resume after circuit-open. 0 = not in skip mode. */
+  skip_until_cycle: number
+}
+
 export interface DaemonState {
   /** Per-room cursor state, keyed by `${project_id}:${room_name}`. */
   rooms: Record<string, RoomState>
@@ -87,7 +98,11 @@ export interface DaemonState {
   daemon: {
     started_at: number
     last_cycle_at: number
+    /** Monotonic cycle counter. Incremented at the start of every runCycle invocation. */
+    cycle_index: number
   }
+  /** Last-known interval value resolved at the start of a cycle. Survives daemon restarts. */
+  interval_cache?: IntervalCache
 }
 
 export const DEFAULT_INTERVAL_SECONDS = 300

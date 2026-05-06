@@ -138,6 +138,7 @@ function runForeground(): void {
         }
         view.printHeader(bannerCfg)
 
+        let headerRefreshed = false
         const runOptions: Parameters<typeof daemon.runLoop>[0] = {
           // Quiet logger: only surface warnings/errors so the cycle
           // lines stay the primary signal. info-level events (config
@@ -154,6 +155,12 @@ function runForeground(): void {
               new_messages: result.new_messages,
               error: result.error,
             })
+          },
+          onCycle: (_outcome, resolved) => {
+            if (!headerRefreshed && resolved) {
+              headerRefreshed = true
+              view.printHeader(bannerCfg, resolved)
+            }
           },
           // exit_on_health_failure stays false → the loop keeps trying;
           // the user can Ctrl+C if it's truly stuck.

@@ -34,6 +34,7 @@ import {
   setRoomState,
   releaseLock,
 } from './state-file.js'
+import { resolveInterval, type ResolvedInterval } from './interval-resolver.js'
 import type { DaemonConfig, DaemonState, RoomConfig } from './types.js'
 
 interface CycleOutcome {
@@ -75,7 +76,10 @@ export async function runCycle(
   state: DaemonState,
   log: DaemonLog = defaultLog,
   onRoom?: RoomCycleListener
-): Promise<CycleOutcome> {
+): Promise<{ outcome: CycleOutcome; resolved: ResolvedInterval }> {
+  state.daemon.cycle_index += 1
+  const resolved = await resolveInterval(cfg, state, { now: Date.now, log })
+
   let uploaded_rooms = 0
   let failed_rooms = 0
 
@@ -105,7 +109,7 @@ export async function runCycle(
   state.daemon.last_cycle_at = Date.now()
   await saveState(state)
 
-  return { uploaded_rooms, failed_rooms }
+  return { outcome: { uploaded_rooms, failed_rooms }, resolved }
 }
 
 /**
@@ -278,7 +282,7 @@ export interface RunOptions {
    * but before the sleep + health check). Used by foreground UIs to
    * stream a "cycle finished, sleeping N s" footer.
    */
-  onCycle?: (outcome: CycleOutcome) => void
+  onCycle?: (outcome: CycleOutcome, resolvedInterval?: ResolvedInterval) => void
   /**
    * When true the loop exits cleanly on health-check failure rather
    * than calling `process.exit(1)`. Foreground mode opts in so the
@@ -335,9 +339,11 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'))
 
   while (!shuttingDown) {
+    let resolved: ResolvedInterval | undefined
     try {
-      const outcome = await runCycle(cfg, state, log, options.onRoom)
-      options.onCycle?.(outcome)
+      const result = await runCycle(cfg, state, log, options.onRoom)
+      resolved = result.resolved
+      options.onCycle?.(result.outcome, resolved)
     } catch (err) {
       log('error', 'cycle threw', {
         error: err instanceof Error ? err.message : String(err),
@@ -353,7 +359,8 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
       }
     }
 
-    await sleep(cfg.interval_seconds * 1000)
+    const sleepMs = resolved ? resolved.value * 1000 : cfg.interval_seconds * 1000
+    await sleep(sleepMs)
   }
 }
 

@@ -66,6 +66,8 @@ describe('getRoomState / setRoomState', () => {
     const rs = getRoomState(s, 'p1', 'unseen')
     expect(rs.last_synced_ms).toBe(0)
     expect(rs.consecutive_failures).toBe(0)
+    expect(s.daemon.cycle_index).toBe(0)
+    expect(s.interval_cache).toBeUndefined()
   })
 
   it('round-trips a stored cursor', () => {

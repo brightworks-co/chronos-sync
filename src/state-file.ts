@@ -162,7 +162,7 @@ export function clampInterval(n: number): number {
 export function emptyState(): DaemonState {
   return {
     rooms: {},
-    daemon: { started_at: Date.now(), last_cycle_at: 0 },
+    daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 },
   }
 }
 
@@ -171,7 +171,7 @@ export async function loadState(): Promise<DaemonState> {
     const raw = await fs.readFile(statePath(), 'utf8')
     const parsed = JSON.parse(raw) as DaemonState
     if (!parsed.rooms || typeof parsed.rooms !== 'object') return emptyState()
-    if (!parsed.daemon) parsed.daemon = { started_at: Date.now(), last_cycle_at: 0 }
+    if (!parsed.daemon) parsed.daemon = { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 }
     return parsed
   } catch {
     return emptyState()
