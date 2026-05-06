@@ -1,6 +1,8 @@
+import pkg from '../../package.json' with { type: 'json' }
+
 /** Daemon filesystem layout constants. */
 
-export const VERSION = '0.1.0-alpha.1'
+export const VERSION: string = pkg.version
 
 export const DAEMON_DIR_NAME = '.chronos'
 export const CONFIG_FILE_NAME = 'config.json'
