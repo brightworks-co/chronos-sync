@@ -52,12 +52,14 @@ export async function loadConfig() {
     });
     const interval = clampInterval(parsed.interval_seconds ?? DEFAULT_INTERVAL_SECONDS);
     const since = normalizeSinceOverride(parsed.since);
+    const harvest = normalizeHarvestThresholds(parsed.harvest);
     return {
         server_url: parsed.server_url.replace(/\/+$/, ''),
         pat: parsed.pat,
         interval_seconds: interval,
         kakaocli_path: parsed.kakaocli_path,
         since,
+        harvest,
         rooms: normalizedRooms,
     };
 }
@@ -86,6 +88,25 @@ function normalizeSinceOverride(value) {
             throw new Error('config.since.override_seconds must be a non-negative finite number');
         }
         out.override_seconds = Math.floor(o);
+    }
+    return out;
+}
+function normalizeHarvestThresholds(value) {
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value !== 'object') {
+        throw new Error('config.harvest must be an object when present');
+    }
+    const raw = value;
+    const out = {};
+    for (const k of ['gap_seconds', 'startup_seconds', 'rate_limit_seconds', 'max_pages']) {
+        if (raw[k] !== undefined) {
+            const v = raw[k];
+            if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+                throw new Error(`config.harvest.${k} must be a non-negative finite number`);
+            }
+            out[k] = Math.floor(v);
+        }
     }
     return out;
 }
@@ -132,7 +153,7 @@ export function clampInterval(n) {
 export function emptyState() {
     return {
         rooms: {},
-        daemon: { started_at: Date.now(), last_cycle_at: 0 },
+        daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 },
     };
 }
 export async function loadState() {
@@ -142,7 +163,7 @@ export async function loadState() {
         if (!parsed.rooms || typeof parsed.rooms !== 'object')
             return emptyState();
         if (!parsed.daemon)
-            parsed.daemon = { started_at: Date.now(), last_cycle_at: 0 };
+            parsed.daemon = { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 };
         return parsed;
     }
     catch {
@@ -164,6 +185,7 @@ export function getRoomState(state, projectId, roomName) {
         last_synced_ms: 0,
         last_success_at: 0,
         consecutive_failures: 0,
+        last_harvest_at: 0,
     });
 }
 export function setRoomState(state, projectId, roomName, next) {

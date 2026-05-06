@@ -7,6 +7,7 @@
  * available via `chronos-sync daemon` for log-aggregation pipelines.
  */
 import type { DaemonConfig, RoomConfig } from './types.js';
+import type { ResolvedInterval } from './interval-resolver.js';
 export declare const ANSI: {
     readonly reset: "\u001B[0m";
     readonly green: "\u001B[32m";
@@ -19,6 +20,7 @@ export interface PrintHeaderInputs {
     config: DaemonConfig;
     configPath: string;
     version: string;
+    resolved?: ResolvedInterval;
 }
 /** Build the startup banner shown when foreground mode boots. */
 export declare function formatHeader(inputs: PrintHeaderInputs): string;
@@ -39,7 +41,7 @@ export declare function formatCycleLine(inputs: CycleLineInputs): string;
 /** Closing line shown when the user hits Ctrl+C. */
 export declare function formatShutdown(): string;
 export interface ForegroundUi {
-    printHeader: (cfg: DaemonConfig) => void;
+    printHeader: (cfg: DaemonConfig, resolved?: ResolvedInterval) => void;
     printCycleLine: (inputs: Omit<CycleLineInputs, 'now'>) => void;
     printShutdown: () => void;
     printWarning: (message: string) => void;

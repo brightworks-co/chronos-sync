@@ -123,7 +123,7 @@ export async function runStatus(out = process.stdout) {
         state = await loadState();
     }
     catch {
-        state = { rooms: {}, daemon: { started_at: 0, last_cycle_at: 0 } };
+        state = { rooms: {}, daemon: { started_at: 0, last_cycle_at: 0, cycle_index: 0 } };
     }
     const text = renderStatus({
         version: VERSION,

@@ -34,3 +34,24 @@ export interface MessagesQuery {
  * wins to keep behavior aligned with the daemon's room dispatch.
  */
 export declare function listMessages(query: MessagesQuery): Promise<KakaoCliMessage[]>;
+export interface HarvestQuery {
+    /** kakaocli chat display name. Mutually exclusive with `chatId`. */
+    chat?: string;
+    /** kakaocli chat numeric id. */
+    chatId?: string | number;
+    /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
+    binary?: string;
+    /** Max scroll pages. Default 5. Passed as `--max-pages <n>`. */
+    maxPages?: number;
+    /** Spawn timeout in ms. Default 60000. */
+    timeoutMs?: number;
+}
+export interface HarvestResult {
+    code: number;
+    stderr: string;
+}
+/**
+ * Invoke `kakaocli harvest --scroll [--chat <name> | --chat-id <id>] [--max-pages <n>]`.
+ * Best-effort: always resolves (never throws) so the caller can warn-log and continue normal sync.
+ */
+export declare function harvestScroll(query: HarvestQuery): Promise<HarvestResult>;

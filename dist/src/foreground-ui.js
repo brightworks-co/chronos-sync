@@ -23,11 +23,17 @@ export function formatHeader(inputs) {
     lines.push(`${ANSI.dim}config:${ANSI.reset} ${inputs.configPath}`);
     lines.push(`${ANSI.dim}서버:${ANSI.reset}   ${inputs.config.server_url}`);
     lines.push(`${ANSI.dim}룸:${ANSI.reset}     ${inputs.config.rooms.length}개 매핑 — ${formatRoomList(inputs.config.rooms)}`);
-    const minutes = inputs.config.interval_seconds / 60;
+    const intervalSeconds = inputs.resolved?.value ?? inputs.config.interval_seconds;
+    const source = inputs.resolved?.source;
+    const minutes = intervalSeconds / 60;
     const pretty = minutes >= 1 && Number.isInteger(minutes)
         ? `${minutes}분`
-        : `${inputs.config.interval_seconds}초`;
-    lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화. 끄려면 Ctrl+C 또는 터미널 닫기.`);
+        : `${intervalSeconds}초`;
+    const sourceTag = source ? ` (${source})` : '';
+    lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`);
+    if (inputs.resolved?.warning) {
+        lines.push(`${ANSI.yellow}! ${inputs.resolved.warning}${ANSI.reset}`);
+    }
     lines.push('─────────────────────────────────────────');
     return lines.join('\n') + '\n';
 }
@@ -79,8 +85,8 @@ function formatClock(d) {
  */
 export function createDefaultForegroundUi() {
     return {
-        printHeader: (cfg) => {
-            process.stdout.write(formatHeader({ config: cfg, configPath: configPath(), version: VERSION }));
+        printHeader: (cfg, resolved) => {
+            process.stdout.write(formatHeader({ config: cfg, configPath: configPath(), version: VERSION, resolved }));
         },
         printCycleLine: (inputs) => {
             process.stdout.write(formatCycleLine(inputs) + '\n');
