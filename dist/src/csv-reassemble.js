@@ -10,8 +10,11 @@
  *   { chat_id, id, sender, sender_id, text, timestamp, is_from_me, type }
  *
  * Output rows are RFC 4180-quoted. Embedded newlines, commas, and quotes in
- * the message body are preserved.
+ * the message body are preserved. System-event payloads (raw JSON like
+ * `{"feedType":25,...}`) are rewritten to localized Korean placeholders so
+ * the Chronos viewer shows readable text instead of the raw JSON.
  */
+import { transformFeedTypeText } from './parser/feedtype.js';
 /** Pad a number to two digits. */
 function pad2(n) {
     return n < 10 ? `0${n}` : String(n);
@@ -60,7 +63,7 @@ export function reassembleMacCsv(messages) {
         // Mac CSV export quotes the User and Message columns so that
         // commas / newlines inside names or content do not break parsing.
         const user = csvQuote(m.sender ?? '', true);
-        const message = csvQuote(m.text ?? '', true);
+        const message = csvQuote(transformFeedTypeText(m.text ?? ''), true);
         lines.push(`${date},${user},${message}`);
     }
     // Trailing newline — Mac export ends with a final \n.

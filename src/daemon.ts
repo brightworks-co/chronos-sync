@@ -41,6 +41,7 @@ import {
   DEFAULT_HARVEST_MAX_CLICKS,
   DEFAULT_HARVEST_SCROLL_DELAY,
   DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD,
+  DEFAULT_HARVEST_ENABLED,
 } from './types.js'
 import { decideCycleHarvest, type HarvestReason } from './harvest-detector.js'
 import { append } from './notifications.js'
@@ -498,34 +499,47 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   const state = await loadState()
   state.daemon.started_at = Date.now()
 
-  // Probe harvest capabilities once at boot.
+  // Probe harvest capabilities once at boot — only when harvest is enabled.
+  // v0.2.9 changed `enabled` default to false (see HarvestThresholds JSDoc):
+  // KakaoTalk auto-populates NTUser on incoming push messages, so steady-state
+  // sync rarely needs harvest. Users who want one-off backfill should run
+  // `chronos-sync harvest` instead.
   let harvestDisabled = false
-  try {
-    const caps = await probeHarvestCapabilities(cfg.kakaocli_path ?? 'kakaocli')
-    if (!caps.scrollSupported) {
+  const harvestEnabled = cfg.harvest?.enabled ?? DEFAULT_HARVEST_ENABLED
+  if (!harvestEnabled) {
+    harvestDisabled = true
+    log(
+      'info',
+      'harvest disabled by config (harvest.enabled is not true). Run `chronos-sync harvest` for a one-off backfill.'
+    )
+  } else {
+    try {
+      const caps = await probeHarvestCapabilities(cfg.kakaocli_path ?? 'kakaocli')
+      if (!caps.scrollSupported) {
+        harvestDisabled = true
+        log('warn', 'harvest disabled: kakaocli does not support --scroll', {
+          binary: cfg.kakaocli_path ?? 'kakaocli',
+          flags: caps.flags,
+        })
+        await append({
+          level: 'error_user_actionable',
+          msg: 'harvest --scroll is not supported by the installed kakaocli binary. Upgrade kakaocli to re-enable harvest.',
+          ctx: { binary: cfg.kakaocli_path ?? 'kakaocli' },
+        })
+      } else {
+        log('info', 'harvest probe ok', { scrollSupported: true })
+      }
+    } catch (err) {
       harvestDisabled = true
-      log('warn', 'harvest disabled: kakaocli does not support --scroll', {
-        binary: cfg.kakaocli_path ?? 'kakaocli',
-        flags: caps.flags,
+      log('warn', 'harvest probe failed; harvest disabled for this session', {
+        error: err instanceof Error ? err.message : String(err),
       })
       await append({
         level: 'error_user_actionable',
-        msg: 'harvest --scroll is not supported by the installed kakaocli binary. Upgrade kakaocli to re-enable harvest.',
-        ctx: { binary: cfg.kakaocli_path ?? 'kakaocli' },
+        msg: 'harvest probe failed at startup. Harvest is disabled. Check kakaocli installation.',
+        ctx: { error: err instanceof Error ? err.message : String(err) },
       })
-    } else {
-      log('info', 'harvest probe ok', { scrollSupported: true })
     }
-  } catch (err) {
-    harvestDisabled = true
-    log('warn', 'harvest probe failed; harvest disabled for this session', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-    await append({
-      level: 'error_user_actionable',
-      msg: 'harvest probe failed at startup. Harvest is disabled. Check kakaocli installation.',
-      ctx: { error: err instanceof Error ? err.message : String(err) },
-    })
   }
 
   // Wrap runCycle to inject harvestDisabled into decideCycleHarvest via state override.

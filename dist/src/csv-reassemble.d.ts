@@ -10,7 +10,9 @@
  *   { chat_id, id, sender, sender_id, text, timestamp, is_from_me, type }
  *
  * Output rows are RFC 4180-quoted. Embedded newlines, commas, and quotes in
- * the message body are preserved.
+ * the message body are preserved. System-event payloads (raw JSON like
+ * `{"feedType":25,...}`) are rewritten to localized Korean placeholders so
+ * the Chronos viewer shows readable text instead of the raw JSON.
  */
 export interface KakaoCliMessage {
     /**

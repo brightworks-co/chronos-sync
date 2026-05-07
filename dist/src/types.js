@@ -18,3 +18,8 @@ export const DEFAULT_HARVEST_SCROLL_DELAY = 1.5;
 export const DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD = 5;
 export const DEFAULT_HARVEST_FAILURE_BACKOFF_BASE_SECONDS = 1800;
 export const DEFAULT_HARVEST_FAILURE_BACKOFF_MAX_SECONDS = 28800;
+/**
+ * Default for `HarvestThresholds.enabled`. v0.2.9 changed this from `true`
+ * (the v0.2.7/0.2.8 implicit behavior) to `false`. See JSDoc on `enabled`.
+ */
+export const DEFAULT_HARVEST_ENABLED = false;
