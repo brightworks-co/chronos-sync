@@ -20,7 +20,7 @@
  */
 
 import { reassembleMacCsv, type KakaoCliMessage } from './csv-reassemble.js'
-import { listMessages, harvestScroll } from './kakaocli.js'
+import { listMessages, harvestScroll, probeHarvestCapabilities, invalidateProbeCache } from './kakaocli.js'
 import { parseExport } from './parser/index.js'
 import { resolveSenderNames } from './sender-resolver.js'
 import { Uploader, UploadError } from './uploader.js'
@@ -35,9 +35,15 @@ import {
   releaseLock,
 } from './state-file.js'
 import { resolveInterval, type ResolvedInterval } from './interval-resolver.js'
-import type { DaemonConfig, DaemonState, RoomConfig } from './types.js'
-import { DEFAULT_HARVEST_MAX_PAGES } from './types.js'
-import { detectHarvest, type HarvestReason } from './harvest-detector.js'
+import type { DaemonConfig, DaemonState, RoomConfig, DaemonRuntime } from './types.js'
+import {
+  DEFAULT_HARVEST_TOP,
+  DEFAULT_HARVEST_MAX_CLICKS,
+  DEFAULT_HARVEST_SCROLL_DELAY,
+  DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD,
+} from './types.js'
+import { decideCycleHarvest, type HarvestReason } from './harvest-detector.js'
+import { append } from './notifications.js'
 
 interface CycleOutcome {
   /** Number of rooms with new messages uploaded this cycle. */
@@ -65,6 +71,49 @@ export interface RoomCycleResult {
  */
 export type RoomCycleListener = (result: RoomCycleResult) => void
 
+// Module-level daemon runtime state — reset on every runLoop start.
+let daemonRuntime: DaemonRuntime = {
+  last_harvest_at: 0,
+  consecutive_harvest_failures: 0,
+  stuck_nudge_flags: {},
+}
+
+/**
+ * Evaluate per-room stuck-nudge thresholds after the room loop.
+ * Emits exactly one notification per room per stuck sequence.
+ * Flag is reset on successful cycle (in syncRoom success path).
+ */
+async function evaluateStuckNudge(
+  state: DaemonState,
+  cfg: DaemonConfig,
+  log: DaemonLog
+): Promise<void> {
+  const nudgeThreshold =
+    cfg.harvest?.stuck_nudge_threshold ?? DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD
+
+  for (const room of cfg.rooms) {
+    const roomKey = `${room.project_id}/${room.room_name}`
+    const rs = getRoomState(state, room.project_id, room.room_name)
+    const stuck = rs.consecutive_stuck_cycles ?? 0
+    if (stuck >= nudgeThreshold && !daemonRuntime.stuck_nudge_flags[roomKey]) {
+      daemonRuntime.stuck_nudge_flags[roomKey] = true
+      log('warn', 'stuck room nudge threshold reached', {
+        room_name: room.room_name,
+        consecutive_stuck_cycles: stuck,
+      })
+      await append({
+        level: 'error_user_actionable',
+        msg: `Room "${room.room_name}" has been stuck for ${stuck} consecutive cycles. Run: chronos-sync diagnose senders`,
+        ctx: {
+          room_name: room.room_name,
+          project_id: room.project_id,
+          consecutive_stuck_cycles: stuck,
+        },
+      })
+    }
+  }
+}
+
 /**
  * Run a single sync cycle for every configured room. Returns counters
  * so the caller can decide whether the cycle was healthy overall.
@@ -83,12 +132,68 @@ export async function runCycle(
   state.daemon.cycle_index += 1
   const resolved = await resolveInterval(cfg, state, { now: Date.now, log })
 
+  // Daemon-scope harvest decision (pre-loop, cycle-scoped, ≤1 spawn per cycle).
+  const cycleDecision = decideCycleHarvest({
+    rooms: state.rooms,
+    daemonLastHarvestAt: state.daemon.last_harvest_at ?? 0,
+    consecutiveHarvestFailures: daemonRuntime.consecutive_harvest_failures,
+    now: Date.now(),
+    thresholds: cfg.harvest,
+  })
+
+  let harvested_this_cycle = false
+
+  if (cycleDecision.shouldHarvest) {
+    // Optimistic write (ADR 0007): record spawn time before await to guard
+    // against launchd restart during the harvest chain.
+    state.daemon.last_harvest_at = Date.now()
+    daemonRuntime.last_harvest_at = state.daemon.last_harvest_at
+
+    log('info', 'harvest --scroll triggered (cycle-scope)', {
+      triggers: cycleDecision.triggers,
+    })
+
+    const harvest = await harvestScroll({
+      top: cfg.harvest?.top ?? DEFAULT_HARVEST_TOP,
+      maxClicks: cfg.harvest?.max_clicks ?? DEFAULT_HARVEST_MAX_CLICKS,
+      scrollDelay: cfg.harvest?.scroll_delay ?? DEFAULT_HARVEST_SCROLL_DELAY,
+      binary: cfg.kakaocli_path,
+    })
+
+    if (harvest.code !== 0) {
+      daemonRuntime.consecutive_harvest_failures += 1
+      log('warn', 'harvest --scroll non-zero exit (continuing)', {
+        code: harvest.code,
+        stderr: harvest.stderr.slice(0, 200),
+      })
+      await append({
+        level: 'warn',
+        msg: 'harvest --scroll failed',
+        ctx: { code: harvest.code, consecutive_failures: daemonRuntime.consecutive_harvest_failures },
+      })
+    } else {
+      daemonRuntime.consecutive_harvest_failures = 0
+    }
+
+    harvested_this_cycle = true
+    // roomKey is "${project_id}:${room_name}" — extract room_name for the callback
+    const firstTriggerKey = cycleDecision.triggers[0]?.roomKey ?? ''
+    const firstRoomName = firstTriggerKey.includes(':')
+      ? firstTriggerKey.slice(firstTriggerKey.indexOf(':') + 1)
+      : firstTriggerKey
+    onHarvest?.({
+      roomName: firstRoomName,
+      reason: cycleDecision.triggers[0]?.reason ?? null,
+      code: harvest.code,
+    })
+  }
+
   let uploaded_rooms = 0
   let failed_rooms = 0
 
   for (const room of cfg.rooms) {
     try {
-      const newCount = await syncRoom(cfg, state, room, log, onHarvest)
+      const newCount = await syncRoom(cfg, state, room, log, harvested_this_cycle)
       if (newCount > 0) uploaded_rooms += 1
       onRoom?.({ room, new_messages: newCount })
     } catch (err) {
@@ -108,6 +213,9 @@ export async function runCycle(
       onRoom?.({ room, new_messages: 0, error: message })
     }
   }
+
+  // Evaluate stuck-nudge after room loop
+  await evaluateStuckNudge(state, cfg, log)
 
   state.daemon.last_cycle_at = Date.now()
   await saveState(state)
@@ -155,52 +263,10 @@ async function syncRoom(
   state: DaemonState,
   room: RoomConfig,
   log: DaemonLog,
-  onHarvest?: RunOptions['onHarvest']
+  harvestedThisCycle: boolean
 ): Promise<number> {
   const cursor = getRoomState(state, room.project_id, room.room_name)
-
-  const decision = detectHarvest({
-    config: cfg,
-    state,
-    roomState: cursor,
-    now: Date.now(),
-    cycleIndex: state.daemon.cycle_index,
-  })
-
-  if (decision.trigger && (room.chat_name !== undefined || room.chat_id !== undefined)) {
-    log('info', 'harvest --scroll triggered', {
-      room_name: room.room_name,
-      reason: decision.reason,
-    })
-    const harvest = await harvestScroll({
-      chat: room.chat_id !== undefined ? undefined : room.chat_name,
-      chatId: room.chat_id,
-      binary: cfg.kakaocli_path,
-      maxPages: cfg.harvest?.max_pages ?? DEFAULT_HARVEST_MAX_PAGES,
-    })
-    if (harvest.code !== 0) {
-      log('warn', 'harvest --scroll non-zero exit (continuing)', {
-        room_name: room.room_name,
-        code: harvest.code,
-        stderr: harvest.stderr.slice(0, 200),
-      })
-    }
-    // mark last_harvest_at regardless of code (rate limit gates retries)
-    setRoomState(state, room.project_id, room.room_name, {
-      ...cursor,
-      last_harvest_at: Date.now(),
-    })
-    onHarvest?.({ roomName: room.room_name, reason: decision.reason, code: harvest.code })
-  } else if (decision.reason === 'rate_limited_skip') {
-    log('info', 'harvest --scroll skipped (rate limited)', {
-      room_name: room.room_name,
-    })
-    onHarvest?.({ roomName: room.room_name, reason: 'rate_limited_skip' })
-  }
-
-  // Re-read cursor after possible last_harvest_at update
-  const updatedCursor = getRoomState(state, room.project_id, room.room_name)
-  const since = computeSince(cfg, updatedCursor)
+  const since = computeSince(cfg, cursor)
 
   const messages = await listMessages({
     chat: room.chat_id !== undefined ? undefined : room.chat_name,
@@ -219,11 +285,11 @@ async function syncRoom(
   // batch, polluting the project's upload history and wasting server hits.
   // Once kakaocli respects `--since` natively this guard becomes a no-op.
   const filtered =
-    updatedCursor.last_synced_ms > 0
+    cursor.last_synced_ms > 0
       ? messages.filter((m) => {
           const ts =
             typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp)
-          return Number.isFinite(ts) && ts > updatedCursor.last_synced_ms
+          return Number.isFinite(ts) && ts > cursor.last_synced_ms
         })
       : messages
 
@@ -242,10 +308,13 @@ async function syncRoom(
     (m) => m.sender === null || m.sender === undefined || m.sender.length === 0
   )
   if (unresolved.length > 0) {
-    const stuck = (updatedCursor.consecutive_stuck_cycles ?? 0) + 1
+    // Grace cycle: if harvest ran this cycle, do not increment stuck counter yet.
+    // NTUser may still be settling — give it one cycle grace period.
+    const currentStuck = cursor.consecutive_stuck_cycles ?? 0
+    const nextStuck = harvestedThisCycle ? currentStuck : currentStuck + 1
     setRoomState(state, room.project_id, room.room_name, {
-      ...updatedCursor,
-      consecutive_stuck_cycles: stuck,
+      ...cursor,
+      consecutive_stuck_cycles: nextStuck,
     })
     log('warn', 'unresolved senders — cycle held back, cursor unchanged', {
       chat_name: room.chat_name,
@@ -253,7 +322,7 @@ async function syncRoom(
       room_name: room.room_name,
       held_back: unresolved.length,
       sample_sender_ids: unresolved.slice(0, 3).map((m) => m.sender_id),
-      consecutive_stuck_cycles: stuck,
+      consecutive_stuck_cycles: nextStuck,
     })
     return 0
   }
@@ -291,10 +360,14 @@ async function syncRoom(
   const lastTs = filtered.reduce((max, m) => {
     const t = typeof m.timestamp === 'number' ? m.timestamp : Date.parse(m.timestamp)
     return Number.isFinite(t) && t > max ? t : max
-  }, updatedCursor.last_synced_ms)
+  }, cursor.last_synced_ms)
+
+  const roomKey = `${room.project_id}/${room.room_name}`
+  // Reset stuck-nudge flag on success so the next stuck sequence can re-fire.
+  delete daemonRuntime.stuck_nudge_flags[roomKey]
 
   setRoomState(state, room.project_id, room.room_name, {
-    ...updatedCursor,
+    ...cursor,
     last_synced_ms: lastTs,
     last_success_at: Date.now(),
     consecutive_failures: 0,
@@ -413,15 +486,58 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
     process.exit(0)
   }
 
+  // Reset runtime state at loop start so restart gives a clean slate.
+  daemonRuntime = {
+    last_harvest_at: 0,
+    consecutive_harvest_failures: 0,
+    stuck_nudge_flags: {},
+  }
+
   const log = options.log ?? defaultLog
   let cfg = await loadConfig()
   const state = await loadState()
   state.daemon.started_at = Date.now()
 
+  // Probe harvest capabilities once at boot.
+  let harvestDisabled = false
+  try {
+    const caps = await probeHarvestCapabilities(cfg.kakaocli_path ?? 'kakaocli')
+    if (!caps.scrollSupported) {
+      harvestDisabled = true
+      log('warn', 'harvest disabled: kakaocli does not support --scroll', {
+        binary: cfg.kakaocli_path ?? 'kakaocli',
+        flags: caps.flags,
+      })
+      await append({
+        level: 'error_user_actionable',
+        msg: 'harvest --scroll is not supported by the installed kakaocli binary. Upgrade kakaocli to re-enable harvest.',
+        ctx: { binary: cfg.kakaocli_path ?? 'kakaocli' },
+      })
+    } else {
+      log('info', 'harvest probe ok', { scrollSupported: true })
+    }
+  } catch (err) {
+    harvestDisabled = true
+    log('warn', 'harvest probe failed; harvest disabled for this session', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    await append({
+      level: 'error_user_actionable',
+      msg: 'harvest probe failed at startup. Harvest is disabled. Check kakaocli installation.',
+      ctx: { error: err instanceof Error ? err.message : String(err) },
+    })
+  }
+
+  // Wrap runCycle to inject harvestDisabled into decideCycleHarvest via state override.
+  // When harvest is disabled, we stub out state.daemon.last_harvest_at to a far-future
+  // value so decideCycleHarvest always returns rate_limited (shouldHarvest: false).
+  const harvestDisabledSentinel = Date.now() + 365 * 24 * 3600 * 1000
+
   process.on('SIGHUP', () => {
     void (async () => {
       try {
         cfg = await loadConfig()
+        invalidateProbeCache()
         log('info', 'config reloaded via SIGHUP', {
           interval_seconds: cfg.interval_seconds,
           rooms: cfg.rooms.length,
@@ -446,6 +562,12 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'))
 
   while (!shuttingDown) {
+    // When harvest is disabled, pin last_harvest_at to far-future so
+    // decideCycleHarvest always skips without any code changes in runCycle.
+    if (harvestDisabled) {
+      state.daemon.last_harvest_at = harvestDisabledSentinel
+    }
+
     let resolved: ResolvedInterval | undefined
     try {
       const result = await runCycle(cfg, state, log, options.onRoom, options.onHarvest)

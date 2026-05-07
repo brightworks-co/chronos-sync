@@ -7,6 +7,8 @@
  *   chronos-sync.lock — single-instance PID lock
  */
 import { type DaemonConfig, type DaemonState, type RoomState } from './types.js';
+/** Reset the max_pages deprecation warn guard. For use in tests only. */
+export declare function resetMaxPagesWarnForTest(): void;
 export declare function chronosDir(): string;
 export declare function configPath(): string;
 export declare function statePath(): string;

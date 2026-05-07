@@ -9,7 +9,7 @@ vi.mock('node:child_process', () => ({
 }))
 
 // Import after mock is set up
-const { harvestScroll } = await import('../src/kakaocli')
+const { harvestScroll, invalidateProbeCache } = await import('../src/kakaocli')
 
 function makeChild(exitCode: number, stderrText = '', delayMs = 0) {
   const stdoutEE = new EventEmitter()
@@ -33,6 +33,7 @@ function makeChild(exitCode: number, stderrText = '', delayMs = 0) {
 
 beforeEach(() => {
   spawnMock.mockReset()
+  invalidateProbeCache()
 })
 
 afterEach(() => {
@@ -42,63 +43,65 @@ afterEach(() => {
 describe('harvestScroll', () => {
   it('resolves with code 0 on success', async () => {
     spawnMock.mockReturnValue(makeChild(0))
-    const result = await harvestScroll({ chat: 'my-room' })
+    const result = await harvestScroll({})
     expect(result.code).toBe(0)
     expect(result.stderr).toBe('')
   })
 
   it('resolves with non-zero exit code and forwards stderr', async () => {
     spawnMock.mockReturnValue(makeChild(1, 'harvest failed'))
-    const result = await harvestScroll({ chat: 'my-room' })
+    const result = await harvestScroll({})
     expect(result.code).toBe(1)
     expect(result.stderr).toBe('harvest failed')
   })
 
-  it('passes --max-pages argument when maxPages is set', async () => {
+  it('passes --max-clicks argument when maxClicks is set', async () => {
     spawnMock.mockReturnValue(makeChild(0))
-    await harvestScroll({ chat: 'my-room', maxPages: 3 })
+    await harvestScroll({ maxClicks: 3 })
     const args = spawnMock.mock.calls[0][1] as string[]
-    expect(args).toContain('--max-pages')
-    expect(args[args.indexOf('--max-pages') + 1]).toBe('3')
+    expect(args).toContain('--max-clicks')
+    expect(args[args.indexOf('--max-clicks') + 1]).toBe('3')
   })
 
-  it('does not pass --max-pages when maxPages is not set', async () => {
+  it('does not pass --max-clicks when maxClicks is not set', async () => {
     spawnMock.mockReturnValue(makeChild(0))
-    await harvestScroll({ chat: 'my-room' })
+    await harvestScroll({})
+    const args = spawnMock.mock.calls[0][1] as string[]
+    expect(args).not.toContain('--max-clicks')
+  })
+
+  it('passes --top when top is set', async () => {
+    spawnMock.mockReturnValue(makeChild(0))
+    await harvestScroll({ top: 5 })
+    const args = spawnMock.mock.calls[0][1] as string[]
+    expect(args).toContain('--top')
+    expect(args[args.indexOf('--top') + 1]).toBe('5')
+  })
+
+  it('does not pass --chat or --chat-id (kakaocli 0.4.1 harvest has no per-room flag)', async () => {
+    spawnMock.mockReturnValue(makeChild(0))
+    await harvestScroll({})
+    const args = spawnMock.mock.calls[0][1] as string[]
+    expect(args).not.toContain('--chat')
+    expect(args).not.toContain('--chat-id')
+  })
+
+  it('does not pass --max-pages (removed in 0.4.1)', async () => {
+    spawnMock.mockReturnValue(makeChild(0))
+    await harvestScroll({})
     const args = spawnMock.mock.calls[0][1] as string[]
     expect(args).not.toContain('--max-pages')
   })
 
-  it('prefers chatId over chat when both are supplied', async () => {
-    spawnMock.mockReturnValue(makeChild(0))
-    await harvestScroll({ chat: 'fallback', chatId: '99999' })
-    const args = spawnMock.mock.calls[0][1] as string[]
-    expect(args).toContain('--chat-id')
-    expect(args[args.indexOf('--chat-id') + 1]).toBe('99999')
-    expect(args).not.toContain('--chat')
-  })
-
-  it('uses --chat when only chat is supplied', async () => {
-    spawnMock.mockReturnValue(makeChild(0))
-    await harvestScroll({ chat: 'my-room' })
-    const args = spawnMock.mock.calls[0][1] as string[]
-    expect(args).toContain('--chat')
-    expect(args[args.indexOf('--chat') + 1]).toBe('my-room')
-  })
-
-  it('throws when neither chat nor chatId is provided', async () => {
-    await expect(harvestScroll({})).rejects.toThrow(/chat|chatId/)
-  })
-
   it('resolves with code -1 when spawn times out', async () => {
     spawnMock.mockReturnValue(makeChild(0, '', 500))
-    const result = await harvestScroll({ chat: 'my-room', timeoutMs: 50 })
+    const result = await harvestScroll({ timeoutMs: 50 })
     expect(result.code).toBe(-1)
   })
 
   it('passes harvest and --scroll as the first two args', async () => {
     spawnMock.mockReturnValue(makeChild(0))
-    await harvestScroll({ chat: 'my-room' })
+    await harvestScroll({})
     const args = spawnMock.mock.calls[0][1] as string[]
     expect(args[0]).toBe('harvest')
     expect(args[1]).toBe('--scroll')

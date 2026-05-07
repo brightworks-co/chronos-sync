@@ -54,14 +54,20 @@ export declare function listMessages(query: MessagesQuery): Promise<KakaoCliMess
  */
 export declare function preserveBigIntPrecision(stdout: string): string;
 export interface HarvestQuery {
-    /** kakaocli chat display name. Mutually exclusive with `chatId`. */
-    chat?: string;
-    /** kakaocli chat numeric id. */
-    chatId?: string | number;
+    /** Process top N most recent chats. Default 5. Passed as `--top <n>`. */
+    top?: number;
+    /** Max 'View Previous Chats' clicks per chat. Passed as `--max-clicks <n>`. */
+    maxClicks?: number;
+    /** Delay between actions in seconds. Passed as `--scroll-delay <s>`. */
+    scrollDelay?: number;
+    /** Show what would be done without doing it. */
+    dryRun?: boolean;
+    /** Path to database file. */
+    db?: string;
+    /** Database encryption key. */
+    key?: string;
     /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
     binary?: string;
-    /** Max scroll pages. Default 5. Passed as `--max-pages <n>`. */
-    maxPages?: number;
     /** Spawn timeout in ms. Default 60000. */
     timeoutMs?: number;
 }
@@ -69,8 +75,24 @@ export interface HarvestResult {
     code: number;
     stderr: string;
 }
+export interface HarvestCaps {
+    /** kakaocli binary that was probed. */
+    binary: string;
+    /** Whether `harvest --scroll` is supported. */
+    scrollSupported: boolean;
+    /** Raw flags extracted from `harvest --help` stdout. */
+    flags: string[];
+}
+/** Invalidate the probe cache (e.g. after exit-64 or SIGHUP). */
+export declare function invalidateProbeCache(): void;
 /**
- * Invoke `kakaocli harvest --scroll [--chat <name> | --chat-id <id>] [--max-pages <n>]`.
+ * Parse `kakaocli harvest --help` and return supported capabilities.
+ * Result is cached for the process lifetime; call `invalidateProbeCache()` to refresh.
+ */
+export declare function probeHarvestCapabilities(binary?: string): Promise<HarvestCaps>;
+/**
+ * Invoke `kakaocli harvest --scroll [--top <n>] [--max-clicks <n>] [--scroll-delay <s>]`.
  * Best-effort: always resolves (never throws) so the caller can warn-log and continue normal sync.
+ * On exit-64 the probe cache is invalidated so the next probe re-checks capabilities.
  */
 export declare function harvestScroll(query: HarvestQuery): Promise<HarvestResult>;

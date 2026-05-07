@@ -105,14 +105,20 @@ export function preserveBigIntPrecision(stdout: string): string {
 }
 
 export interface HarvestQuery {
-  /** kakaocli chat display name. Mutually exclusive with `chatId`. */
-  chat?: string
-  /** kakaocli chat numeric id. */
-  chatId?: string | number
+  /** Process top N most recent chats. Default 5. Passed as `--top <n>`. */
+  top?: number
+  /** Max 'View Previous Chats' clicks per chat. Passed as `--max-clicks <n>`. */
+  maxClicks?: number
+  /** Delay between actions in seconds. Passed as `--scroll-delay <s>`. */
+  scrollDelay?: number
+  /** Show what would be done without doing it. */
+  dryRun?: boolean
+  /** Path to database file. */
+  db?: string
+  /** Database encryption key. */
+  key?: string
   /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
   binary?: string
-  /** Max scroll pages. Default 5. Passed as `--max-pages <n>`. */
-  maxPages?: number
   /** Spawn timeout in ms. Default 60000. */
   timeoutMs?: number
 }
@@ -122,26 +128,74 @@ export interface HarvestResult {
   stderr: string
 }
 
+export interface HarvestCaps {
+  /** kakaocli binary that was probed. */
+  binary: string
+  /** Whether `harvest --scroll` is supported. */
+  scrollSupported: boolean
+  /** Raw flags extracted from `harvest --help` stdout. */
+  flags: string[]
+}
+
+// Module-level probe cache — invalidated on exit-64 or SIGHUP.
+let _probeCache: HarvestCaps | null = null
+
+/** Invalidate the probe cache (e.g. after exit-64 or SIGHUP). */
+export function invalidateProbeCache(): void {
+  _probeCache = null
+}
+
 /**
- * Invoke `kakaocli harvest --scroll [--chat <name> | --chat-id <id>] [--max-pages <n>]`.
+ * Parse `kakaocli harvest --help` and return supported capabilities.
+ * Result is cached for the process lifetime; call `invalidateProbeCache()` to refresh.
+ */
+export async function probeHarvestCapabilities(binary = 'kakaocli'): Promise<HarvestCaps> {
+  if (_probeCache !== null && _probeCache.binary === binary) return _probeCache
+
+  const { stdout, stderr } = await runChild(binary, ['harvest', '--help'])
+  const combined = stdout + stderr
+  // Extract long-form flags from help text: --flag-name
+  const flags = Array.from(combined.matchAll(/--([a-z][a-z0-9-]*)/g), (m) => `--${m[1]}`)
+  const unique = [...new Set(flags)]
+  const caps: HarvestCaps = {
+    binary,
+    scrollSupported: unique.includes('--scroll'),
+    flags: unique,
+  }
+  _probeCache = caps
+  return caps
+}
+
+/**
+ * Invoke `kakaocli harvest --scroll [--top <n>] [--max-clicks <n>] [--scroll-delay <s>]`.
  * Best-effort: always resolves (never throws) so the caller can warn-log and continue normal sync.
+ * On exit-64 the probe cache is invalidated so the next probe re-checks capabilities.
  */
 export async function harvestScroll(query: HarvestQuery): Promise<HarvestResult> {
   const binary = query.binary ?? 'kakaocli'
   const args = ['harvest', '--scroll']
-  if (query.chatId !== undefined) {
-    args.push('--chat-id', String(query.chatId))
-  } else if (query.chat !== undefined) {
-    args.push('--chat', query.chat)
-  } else {
-    throw new Error('harvestScroll requires `chat` or `chatId`')
+  if (query.top !== undefined) {
+    args.push('--top', String(query.top))
   }
-  if (query.maxPages !== undefined) {
-    args.push('--max-pages', String(query.maxPages))
+  if (query.maxClicks !== undefined) {
+    args.push('--max-clicks', String(query.maxClicks))
+  }
+  if (query.scrollDelay !== undefined) {
+    args.push('--scroll-delay', String(query.scrollDelay))
+  }
+  if (query.dryRun) {
+    args.push('--dry-run')
+  }
+  if (query.db !== undefined) {
+    args.push('--db', query.db)
+  }
+  if (query.key !== undefined) {
+    args.push('--key', query.key)
   }
 
   const timeoutMs = query.timeoutMs ?? 60_000
   const { stderr, code } = await runChild(binary, args, timeoutMs)
+  if (code === 64) invalidateProbeCache()
   return { code, stderr }
 }
 
