@@ -24,16 +24,27 @@ describe('parseQueryRows', () => {
     expect(map.get('12345')).toBe('참가자B(E)')
   })
 
-  it('keys by String(numericId) — both sides observe the same JS-rounded value', () => {
-    // KakaoTalk userIds beyond 2^53 lose precision when JSON.parse hits
-    // a bare number literal. The map's keys mirror that lossy value;
-    // this is acceptable because kakaocli's `messages --json` output
-    // suffers the identical rounding, so callers always look up under
-    // the same key. We simulate that real-world shape here.
-    const id = Number(5283788016742773350) // already 5283788016742774000
-    const stdout = `[[${id}, "이몽룡"]]`
+  it('preserves full precision for 19-digit BigInt userIds (regression: dho stuck v0.2.7)', () => {
+    // Open-chat sender_id values are typically 19 digits — well past
+    // Number.MAX_SAFE_INTEGER (16 digits). A plain JSON.parse on the raw
+    // `kakaocli query` stdout rounds the trailing 2-3 digits to fit IEEE
+    // 754 doubles, producing map keys that no longer match the
+    // String(sender_id) lookup keys callers build from the (precision-
+    // preserved) `kakaocli messages --json` output. Result: every open-chat
+    // sender silently fails resolution, daemon hold-back fires forever,
+    // dho-style rooms freeze permanently (chronos-sync v0.2.7 dho stuck
+    // incident).
+    //
+    // Fix: route stdout through `preserveBigIntPrecision` (shared with
+    // the messages parser) before JSON.parse so map keys retain full
+    // precision and align exactly with caller lookup keys.
+    const stdout =
+      '[[6321186593654462422, "드림솔져(헬)"], [7372629836270768733, "뀰꿀"], [6763166015463444794, "키루파(A)"]]'
     const map = parseQueryRows(stdout)
-    expect(map.get(String(id))).toBe('이몽룡')
+    expect(map.size).toBe(3)
+    expect(map.get('6321186593654462422')).toBe('드림솔져(헬)')
+    expect(map.get('7372629836270768733')).toBe('뀰꿀')
+    expect(map.get('6763166015463444794')).toBe('키루파(A)')
   })
 
   it('accepts userId as a string and preserves precision', () => {

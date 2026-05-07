@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.8 (2026-05-08)
+
+### Fixed
+
+- **Open-chat sender resolution silently fails for 19-digit BigInt userIds (regression: dho stuck after v0.2.7)**: `parseQueryRows` ran `kakaocli query` stdout through plain `JSON.parse`, which rounded the trailing 2–3 digits of every 19-digit `userId` (well past `Number.MAX_SAFE_INTEGER`). The resulting map keys (e.g. `6321186593654462000`) no longer matched the precision-preserved sender_id keys built from `kakaocli messages` output (`6321186593654462422`), so every open-chat sender failed lookup. The hold-back invariant (PR #7) then froze the cycle indefinitely. Fix: route `kakaocli query` stdout through `preserveBigIntPrecision` (now also handles tuple-form `[<bigint>, "name"]` 2-D arrays) before `JSON.parse`. ([ADR 0007 amendment](docs/adr/0007-harvest-state-split.md))
+
+### Changed
+
+- `preserveBigIntPrecision` now covers two emission shapes: object form (`"key": <bigint>`) and tuple form (`[<bigint>, ...]`). The tuple branch is what `kakaocli query` returns.
+
 ## 0.2.7 (2026-05-07)
 
 ### Fixed
