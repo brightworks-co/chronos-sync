@@ -243,13 +243,22 @@ async function syncRoom(cfg, state, room, log, onHarvest) {
 export async function enrichSenders(messages, binary, log) {
     // Collect sender_ids that need a name lookup. Skip is_from_me rows —
     // those carry the local user's own name from kakaocli already.
+    // sender_id may be a string when it exceeds Number.MAX_SAFE_INTEGER —
+    // see preserveBigIntPrecision in kakaocli.ts.
     const needLookup = new Set();
     for (const m of messages) {
         if (m.sender !== null && m.sender !== undefined && m.sender.length > 0)
             continue;
         if (m.is_from_me)
             continue;
-        if (typeof m.sender_id === 'number' && Number.isFinite(m.sender_id) && m.sender_id > 0) {
+        if (typeof m.sender_id === 'number') {
+            if (!Number.isFinite(m.sender_id) || m.sender_id <= 0)
+                continue;
+            needLookup.add(String(m.sender_id));
+        }
+        else if (typeof m.sender_id === 'string') {
+            if (!/^[1-9][0-9]*$/.test(m.sender_id))
+                continue;
             needLookup.add(m.sender_id);
         }
     }

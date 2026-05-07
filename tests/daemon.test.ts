@@ -256,12 +256,15 @@ describe('runCycle', () => {
 
   it('enriches null sender via resolveSenderNames before reassembly', async () => {
     const ts = Date.UTC(2026, 3, 26, 0, 0, 0)
+    // Production path: kakaocli output flows through preserveBigIntPrecision
+    // so 19-digit sender_id arrives as an exact JSON string. enrichSenders
+    // forwards that exact string to the resolver — no JS number rounding.
     vi.mocked(listMessages).mockResolvedValue([
       {
         chat_id: 1,
         id: 1,
         sender: null,
-        sender_id: 5283788016742773350,
+        sender_id: '5283788016742773350',
         text: '안녕',
         timestamp: ts,
         is_from_me: false,
@@ -277,7 +280,7 @@ describe('runCycle', () => {
 
     expect(resolveSenderNames).toHaveBeenCalledTimes(1)
     const [ids] = vi.mocked(resolveSenderNames).mock.calls[0]
-    expect(ids).toContain(5283788016742773350)
+    expect(ids).toContain('5283788016742773350')
   })
 
   it('does not call resolveSenderNames when every row has a sender', async () => {
@@ -352,20 +355,18 @@ describe('computeSince', () => {
 
 describe('enrichSenders', () => {
   const ts = Date.UTC(2026, 3, 26, 0, 0, 0)
-  // KakaoCliMessage.sender_id is `number` — its in-memory representation
-  // already loses precision for ids beyond 2^53. The map returned by
-  // resolveSenderNames is keyed by `String(sender_id)` so both sides
-  // observe the same lossy value (this matches the production path:
-  // kakaocli messages JSON also pre-rounds the same id).
-  const lossyId = Number(5283788016742773350)
-  const lossyKey = String(lossyId)
+  // Real-world 19-digit BigInt sender_id from the dho open chat. After
+  // preserveBigIntPrecision (kakaocli.ts) it arrives as an exact string
+  // — that exact form is what the resolver's SQL `WHERE userId IN (...)`
+  // needs to hit the right NTUser row.
+  const exactSenderId = '5283788016742773350'
 
   function row(overrides: Partial<KakaoCliMessage> = {}): KakaoCliMessage {
     return {
       chat_id: 1,
       id: 1,
       sender: null,
-      sender_id: lossyId,
+      sender_id: exactSenderId,
       text: '안녕',
       timestamp: ts,
       is_from_me: false,
@@ -375,7 +376,7 @@ describe('enrichSenders', () => {
   }
 
   it('replaces null sender with NTUser-resolved name', async () => {
-    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([[lossyKey, '이몽룡']]))
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([[exactSenderId, '이몽룡']]))
     const out = await enrichSenders([row()], undefined, () => {})
     expect(out[0].sender).toBe('이몽룡')
   })
@@ -415,6 +416,30 @@ describe('enrichSenders', () => {
     )
     expect(out[0].sender).toBeNull()
     expect(logs.some((l) => l.level === 'warn' && l.msg.includes('sender resolver'))).toBe(true)
+  })
+
+  it('passes string sender_id (BigInt-shaped) through to the resolver verbatim — no precision loss', async () => {
+    // Regression: before preserveBigIntPrecision, kakaocli emitted bare
+    // 19-digit numbers and JSON.parse rounded them, so the SQL JOIN
+    // missed and PR #7 stalled the cycle indefinitely. The resolver
+    // must now receive the exact original digits.
+    const captured: Array<ReadonlyArray<number | string>> = []
+    vi.mocked(resolveSenderNames).mockImplementation(async (ids) => {
+      captured.push(ids)
+      return new Map([[exactSenderId, '참가자C']])
+    })
+    const out = await enrichSenders([row()], undefined, () => {})
+    expect(out[0].sender).toBe('참가자C')
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toContain(exactSenderId)
+    // The number-rounded form must NOT be what we sent the resolver.
+    expect(captured[0]).not.toContain('5283788016742774000')
+  })
+
+  it('accepts numeric sender_id below MAX_SAFE_INTEGER and stringifies it for the resolver', async () => {
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['42', '안전']]))
+    const out = await enrichSenders([row({ sender_id: 42 })], undefined, () => {})
+    expect(out[0].sender).toBe('안전')
   })
 })
 
