@@ -76,8 +76,23 @@ export interface HarvestThresholds {
     startup_seconds?: number;
     /** Rate limit (sec). Minimum interval between harvest calls for the same room. Default 30min (1800). */
     rate_limit_seconds?: number;
-    /** Max pages for kakaocli harvest --scroll. Default 5. */
+    /**
+     * @deprecated kakaocli 0.4.1 `harvest` does not accept `--max-pages`. Use `max_clicks` instead.
+     * Accepted on read for backwards compat; emits one warn at startup then ignored.
+     */
     max_pages?: number;
+    /** Process top N most recent chats. Passed as `--top <n>`. Default 5. */
+    top?: number;
+    /** Max 'View Previous Chats' clicks per chat. Passed as `--max-clicks <n>`. Default 3. */
+    max_clicks?: number;
+    /** Delay between scroll actions in seconds. Passed as `--scroll-delay <s>`. Default 1.5. */
+    scroll_delay?: number;
+    /** Consecutive stuck-cycles threshold before a nudge notification is emitted per room. Default 5. */
+    stuck_nudge_threshold?: number;
+    /** Base seconds for harvest failure exponential backoff. Default 1800. */
+    harvest_failure_backoff_base_seconds?: number;
+    /** Maximum seconds for harvest failure exponential backoff cap. Default 28800. */
+    harvest_failure_backoff_max_seconds?: number;
 }
 export interface RoomState {
     /** Last message timestamp synced to the server, in epoch milliseconds. */
@@ -86,7 +101,10 @@ export interface RoomState {
     last_success_at: number;
     /** Number of consecutive cycle failures since the last success. */
     consecutive_failures: number;
-    /** Wall-clock timestamp of the last kakaocli harvest --scroll call (epoch ms). 0 = never called. */
+    /**
+     * @deprecated Moved to `DaemonState.daemon.last_harvest_at` (daemon-scope). Reader-only for
+     * backwards-compat with 0.2.6 state files; never written by 0.2.7+.
+     */
     last_harvest_at?: number;
     /**
      * Number of consecutive cycles that were held back because at least one
@@ -116,6 +134,8 @@ export interface DaemonState {
         last_cycle_at: number;
         /** Monotonic cycle counter. Incremented at the start of every runCycle invocation. */
         cycle_index: number;
+        /** Wall-clock epoch ms of the last harvestScroll spawn. 0 = never called. Persisted. */
+        last_harvest_at?: number;
     };
     /** Last-known interval value resolved at the start of a cycle. Survives daemon restarts. */
     interval_cache?: IntervalCache;
@@ -131,3 +151,21 @@ export declare const DEFAULT_HARVEST_GAP_SECONDS: number;
 export declare const DEFAULT_HARVEST_STARTUP_SECONDS: number;
 export declare const DEFAULT_HARVEST_RATE_LIMIT_SECONDS: number;
 export declare const DEFAULT_HARVEST_MAX_PAGES = 5;
+export declare const DEFAULT_HARVEST_TOP = 5;
+export declare const DEFAULT_HARVEST_MAX_CLICKS = 3;
+export declare const DEFAULT_HARVEST_SCROLL_DELAY = 1.5;
+export declare const DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD = 5;
+export declare const DEFAULT_HARVEST_FAILURE_BACKOFF_BASE_SECONDS = 1800;
+export declare const DEFAULT_HARVEST_FAILURE_BACKOFF_MAX_SECONDS = 28800;
+/**
+ * In-memory only runtime state for the daemon. NOT persisted to state.json.
+ * Reset to defaults on every process start.
+ */
+export interface DaemonRuntime {
+    /** Wall-clock epoch ms of the last harvestScroll spawn. 0 = never called. */
+    last_harvest_at: number;
+    /** Number of consecutive harvestScroll non-zero exits since last success. Reset on process restart. */
+    consecutive_harvest_failures: number;
+    /** Per-room flag tracking whether a stuck-nudge has been emitted for the current stuck sequence. */
+    stuck_nudge_flags: Record<string, boolean>;
+}

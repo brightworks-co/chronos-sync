@@ -12,6 +12,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DAEMON_DIR_NAME, CONFIG_FILE_NAME, STATE_FILE_NAME, LOCK_FILE_NAME, } from './constants.js';
 import { DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS, } from './types.js';
+let maxPagesWarnEmitted = false;
+/** Reset the max_pages deprecation warn guard. For use in tests only. */
+export function resetMaxPagesWarnForTest() {
+    maxPagesWarnEmitted = false;
+}
 export function chronosDir() {
     return join(homedir(), DAEMON_DIR_NAME);
 }
@@ -99,7 +104,17 @@ function normalizeHarvestThresholds(value) {
     }
     const raw = value;
     const out = {};
-    for (const k of ['gap_seconds', 'startup_seconds', 'rate_limit_seconds', 'max_pages']) {
+    const intFields = [
+        'gap_seconds',
+        'startup_seconds',
+        'rate_limit_seconds',
+        'top',
+        'max_clicks',
+        'stuck_nudge_threshold',
+        'harvest_failure_backoff_base_seconds',
+        'harvest_failure_backoff_max_seconds',
+    ];
+    for (const k of intFields) {
         if (raw[k] !== undefined) {
             const v = raw[k];
             if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
@@ -107,6 +122,27 @@ function normalizeHarvestThresholds(value) {
             }
             out[k] = Math.floor(v);
         }
+    }
+    // scroll_delay is a float (seconds), not floored
+    if (raw.scroll_delay !== undefined) {
+        const v = raw.scroll_delay;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+            throw new Error('config.harvest.scroll_delay must be a non-negative finite number');
+        }
+        out.scroll_delay = v;
+    }
+    // max_pages: deprecated — read tolerated, emit one warn, then drop from output
+    if (raw.max_pages !== undefined) {
+        const v = raw.max_pages;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+            throw new Error('config.harvest.max_pages must be a non-negative finite number');
+        }
+        if (!maxPagesWarnEmitted) {
+            maxPagesWarnEmitted = true;
+            process.stderr.write('[chronos-sync] config.harvest.max_pages is deprecated and ignored. ' +
+                'kakaocli 0.4.1 does not accept --max-pages. Use max_clicks instead.\n');
+        }
+        out.max_pages = Math.floor(v);
     }
     return out;
 }
@@ -153,7 +189,7 @@ export function clampInterval(n) {
 export function emptyState() {
     return {
         rooms: {},
-        daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 },
+        daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0, last_harvest_at: 0 },
     };
 }
 export async function loadState() {
@@ -162,8 +198,13 @@ export async function loadState() {
         const parsed = JSON.parse(raw);
         if (!parsed.rooms || typeof parsed.rooms !== 'object')
             return emptyState();
-        if (!parsed.daemon)
+        if (!parsed.daemon) {
             parsed.daemon = { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 };
+        }
+        // Forward-compat: 0.2.6 state files lack last_harvest_at; default to 0.
+        if (parsed.daemon.last_harvest_at === undefined) {
+            parsed.daemon.last_harvest_at = 0;
+        }
         return parsed;
     }
     catch {

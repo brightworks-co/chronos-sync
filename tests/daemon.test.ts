@@ -469,7 +469,35 @@ describe('runCycle harvest integration', () => {
 
     expect(harvestScroll).toHaveBeenCalledTimes(1)
     const call = vi.mocked(harvestScroll).mock.calls[0][0]
-    expect(call.chat).toBe('kakao chat A')
+    // kakaocli 0.4.1: harvest is not per-room; chat/chatId removed, top used instead
+    expect(call.top).toBe(5)
+  })
+
+  it('AC-2: calls harvestScroll exactly once even when multiple rooms are stale', async () => {
+    const twoRoomConfig: DaemonConfig = {
+      ...baseConfig,
+      rooms: [
+        { chat_name: 'kakao chat A', project_id: 'p1', room_name: 'room-a' },
+        { chat_name: 'kakao chat B', project_id: 'p1', room_name: 'room-b' },
+      ],
+    }
+    const state = emptyState()
+    // Both rooms stale beyond 24h startup threshold
+    state.rooms['p1:room-a'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+    state.rooms['p1:room-b'] = {
+      last_synced_ms: NOW - 25 * 3600 * 1000,
+      last_success_at: 0,
+      consecutive_failures: 0,
+    }
+
+    await runCycle(twoRoomConfig, state, () => {})
+
+    // Cycle-scope hoist: single spawn regardless of how many rooms triggered
+    expect(harvestScroll).toHaveBeenCalledTimes(1)
   })
 
   it('does not call harvestScroll when decision is null', async () => {
@@ -487,7 +515,7 @@ describe('runCycle harvest integration', () => {
     expect(harvestScroll).not.toHaveBeenCalled()
   })
 
-  it('sets last_harvest_at after harvestScroll is called', async () => {
+  it('sets state.daemon.last_harvest_at after harvestScroll is called', async () => {
     const state = emptyState()
     state.rooms['p1:room-a'] = {
       last_synced_ms: NOW - 25 * 3600 * 1000,
@@ -497,9 +525,8 @@ describe('runCycle harvest integration', () => {
 
     await runCycle(baseConfig, state, () => {})
 
-    const cursor = getRoomState(state, 'p1', 'room-a')
-    expect(cursor.last_harvest_at).toBeGreaterThan(0)
-    expect(cursor.last_harvest_at).toBe(NOW)
+    expect(state.daemon.last_harvest_at).toBeGreaterThan(0)
+    expect(state.daemon.last_harvest_at).toBe(NOW)
   })
 
   it('logs warn and continues sync when harvestScroll returns non-zero code', async () => {
@@ -609,6 +636,8 @@ describe('runCycle — client-side post-filter (kakaocli --since not honored)', 
 })
 
 describe('runCycle — strict skip on unresolved senders (no 참여자_<id> ever sent)', () => {
+  const STUCK_NOW = Date.UTC(2026, 3, 26, 12, 0, 0)
+
   const mkMsgNullSender = (id: number, ts: number, sender_id: number): KakaoCliMessage => ({
     chat_id: 1,
     id,
@@ -620,10 +649,20 @@ describe('runCycle — strict skip on unresolved senders (no 참여자_<id> ever
     type: 'text',
   })
 
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(STUCK_NOW)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('holds back the entire cycle when a single sender_id cannot be resolved, leaving the cursor untouched', async () => {
-    const cursor = Date.UTC(2026, 3, 26, 0, 0, 0)
-    const ts1 = Date.UTC(2026, 3, 26, 0, 5, 0)
-    const ts2 = Date.UTC(2026, 3, 26, 0, 6, 0)
+    // Use a very recent cursor so harvest does not fire (no grace cycle interference).
+    const cursor = STUCK_NOW - 1000
+    const ts1 = STUCK_NOW - 900
+    const ts2 = STUCK_NOW - 800
     vi.mocked(listMessages).mockResolvedValue([
       mkMsgNullSender(1, ts1, 111),
       mkMsgNullSender(2, ts2, 222),
@@ -653,8 +692,9 @@ describe('runCycle — strict skip on unresolved senders (no 참여자_<id> ever
   })
 
   it('increments consecutive_stuck_cycles each held-back cycle and resets to 0 on a clean cycle', async () => {
-    const cursor = Date.UTC(2026, 3, 26, 0, 0, 0)
-    const ts1 = Date.UTC(2026, 3, 26, 0, 5, 0)
+    // Use a very recent cursor so harvest does not fire (no grace cycle interference).
+    const cursor = STUCK_NOW - 1000
+    const ts1 = STUCK_NOW - 900
     vi.mocked(listMessages).mockResolvedValue([mkMsgNullSender(1, ts1, 555)])
     vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
     const state = emptyState()

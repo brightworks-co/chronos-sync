@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -324,5 +324,127 @@ describe('getRoomState last_harvest_at default', () => {
     const s = emptyState()
     const rs = getRoomState(s, 'p1', 'unseen')
     expect(rs.last_harvest_at).toBe(0)
+  })
+})
+
+describe('loadState — state.daemon.last_harvest_at forward-compat (0.2.6 state files)', () => {
+  it('defaults last_harvest_at to 0 when field is absent (0.2.6 state)', async () => {
+    const chronosDir = join(process.env.HOME!, '.chronos')
+    await fs.mkdir(chronosDir, { recursive: true })
+    // Write a 0.2.6-style state without last_harvest_at
+    const oldState = {
+      rooms: {},
+      daemon: { started_at: 1000, last_cycle_at: 2000, cycle_index: 3 },
+    }
+    await fs.writeFile(join(chronosDir, 'state.json'), JSON.stringify(oldState), 'utf8')
+    const loaded = await loadState()
+    expect(loaded.daemon.last_harvest_at).toBe(0)
+  })
+
+  it('preserves last_harvest_at when present', async () => {
+    const chronosDir = join(process.env.HOME!, '.chronos')
+    await fs.mkdir(chronosDir, { recursive: true })
+    const newState = {
+      rooms: {},
+      daemon: { started_at: 1000, last_cycle_at: 2000, cycle_index: 3, last_harvest_at: 9999 },
+    }
+    await fs.writeFile(join(chronosDir, 'state.json'), JSON.stringify(newState), 'utf8')
+    const loaded = await loadState()
+    expect(loaded.daemon.last_harvest_at).toBe(9999)
+  })
+})
+
+describe('emptyState — daemon.last_harvest_at initialized to 0', () => {
+  it('returns last_harvest_at 0 in a fresh state', () => {
+    const s = emptyState()
+    expect(s.daemon.last_harvest_at).toBe(0)
+  })
+})
+
+describe('loadConfig — harvest new fields accepted', () => {
+  async function writeConfig(body: unknown): Promise<void> {
+    await fs.mkdir(join(process.env.HOME!, '.chronos'), { recursive: true })
+    await fs.writeFile(
+      join(process.env.HOME!, '.chronos', 'config.json'),
+      JSON.stringify(body),
+      'utf8'
+    )
+  }
+
+  const validBase = {
+    server_url: 'https://example.test',
+    pat: 'chr_pat_' + 'a'.repeat(32),
+    interval_seconds: 60,
+    rooms: [{ chat_name: 'room', project_id: 'p1', room_name: 'r1' }],
+  }
+
+  it('accepts all new harvest fields', async () => {
+    await writeConfig({
+      ...validBase,
+      harvest: {
+        top: 5,
+        max_clicks: 3,
+        scroll_delay: 1.5,
+        stuck_nudge_threshold: 5,
+        harvest_failure_backoff_base_seconds: 1800,
+        harvest_failure_backoff_max_seconds: 28800,
+      },
+    })
+    const cfg = await loadConfig()
+    expect(cfg.harvest?.top).toBe(5)
+    expect(cfg.harvest?.max_clicks).toBe(3)
+    expect(cfg.harvest?.scroll_delay).toBe(1.5)
+    expect(cfg.harvest?.stuck_nudge_threshold).toBe(5)
+    expect(cfg.harvest?.harvest_failure_backoff_base_seconds).toBe(1800)
+    expect(cfg.harvest?.harvest_failure_backoff_max_seconds).toBe(28800)
+  })
+
+  it('floors integer harvest fields but preserves scroll_delay as float', async () => {
+    await writeConfig({
+      ...validBase,
+      harvest: { top: 5.9, scroll_delay: 1.75 },
+    })
+    const cfg = await loadConfig()
+    expect(cfg.harvest?.top).toBe(5)
+    expect(cfg.harvest?.scroll_delay).toBe(1.75)
+  })
+
+  it('accepts max_pages (deprecated) without throwing and keeps the value', async () => {
+    await writeConfig({
+      ...validBase,
+      harvest: { max_pages: 5 },
+    })
+    const cfg = await loadConfig()
+    // deprecated but tolerated — value present in output for read compat
+    expect(cfg.harvest?.max_pages).toBe(5)
+  })
+
+  it('AC-12: max_pages deprecation warn emitted exactly once across multiple loadConfig calls', async () => {
+    const { resetMaxPagesWarnForTest } = await import('../src/state-file')
+    resetMaxPagesWarnForTest()
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      await writeConfig({ ...validBase, harvest: { max_pages: 5 } })
+      await loadConfig()
+      await loadConfig()
+      await loadConfig()
+
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('max_pages')
+      )
+      expect(warnCalls).toHaveLength(1)
+    } finally {
+      stderrSpy.mockRestore()
+      resetMaxPagesWarnForTest()
+    }
+  })
+
+  it('rejects negative scroll_delay', async () => {
+    await writeConfig({
+      ...validBase,
+      harvest: { scroll_delay: -1 },
+    })
+    await expect(loadConfig()).rejects.toThrow(/config\.harvest\.scroll_delay/)
   })
 })

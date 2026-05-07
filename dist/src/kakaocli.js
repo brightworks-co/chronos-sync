@@ -70,27 +70,62 @@ export function preserveBigIntPrecision(stdout) {
     // zero — the receiver tolerates strings either way.
     return stdout.replace(/"(sender_id|chat_id|id|logId|userId)"(\s*):(\s*)(\d{16,})/g, '"$1"$2:$3"$4"');
 }
+// Module-level probe cache — invalidated on exit-64 or SIGHUP.
+let _probeCache = null;
+/** Invalidate the probe cache (e.g. after exit-64 or SIGHUP). */
+export function invalidateProbeCache() {
+    _probeCache = null;
+}
 /**
- * Invoke `kakaocli harvest --scroll [--chat <name> | --chat-id <id>] [--max-pages <n>]`.
+ * Parse `kakaocli harvest --help` and return supported capabilities.
+ * Result is cached for the process lifetime; call `invalidateProbeCache()` to refresh.
+ */
+export async function probeHarvestCapabilities(binary = 'kakaocli') {
+    if (_probeCache !== null && _probeCache.binary === binary)
+        return _probeCache;
+    const { stdout, stderr } = await runChild(binary, ['harvest', '--help']);
+    const combined = stdout + stderr;
+    // Extract long-form flags from help text: --flag-name
+    const flags = Array.from(combined.matchAll(/--([a-z][a-z0-9-]*)/g), (m) => `--${m[1]}`);
+    const unique = [...new Set(flags)];
+    const caps = {
+        binary,
+        scrollSupported: unique.includes('--scroll'),
+        flags: unique,
+    };
+    _probeCache = caps;
+    return caps;
+}
+/**
+ * Invoke `kakaocli harvest --scroll [--top <n>] [--max-clicks <n>] [--scroll-delay <s>]`.
  * Best-effort: always resolves (never throws) so the caller can warn-log and continue normal sync.
+ * On exit-64 the probe cache is invalidated so the next probe re-checks capabilities.
  */
 export async function harvestScroll(query) {
     const binary = query.binary ?? 'kakaocli';
     const args = ['harvest', '--scroll'];
-    if (query.chatId !== undefined) {
-        args.push('--chat-id', String(query.chatId));
+    if (query.top !== undefined) {
+        args.push('--top', String(query.top));
     }
-    else if (query.chat !== undefined) {
-        args.push('--chat', query.chat);
+    if (query.maxClicks !== undefined) {
+        args.push('--max-clicks', String(query.maxClicks));
     }
-    else {
-        throw new Error('harvestScroll requires `chat` or `chatId`');
+    if (query.scrollDelay !== undefined) {
+        args.push('--scroll-delay', String(query.scrollDelay));
     }
-    if (query.maxPages !== undefined) {
-        args.push('--max-pages', String(query.maxPages));
+    if (query.dryRun) {
+        args.push('--dry-run');
+    }
+    if (query.db !== undefined) {
+        args.push('--db', query.db);
+    }
+    if (query.key !== undefined) {
+        args.push('--key', query.key);
     }
     const timeoutMs = query.timeoutMs ?? 60_000;
     const { stderr, code } = await runChild(binary, args, timeoutMs);
+    if (code === 64)
+        invalidateProbeCache();
     return { code, stderr };
 }
 function runChild(binary, args, timeoutMs) {

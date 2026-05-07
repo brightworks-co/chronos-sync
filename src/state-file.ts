@@ -28,6 +28,13 @@ import {
   MAX_INTERVAL_SECONDS,
 } from './types.js'
 
+let maxPagesWarnEmitted = false
+
+/** Reset the max_pages deprecation warn guard. For use in tests only. */
+export function resetMaxPagesWarnForTest(): void {
+  maxPagesWarnEmitted = false
+}
+
 export function chronosDir(): string {
   return join(homedir(), DAEMON_DIR_NAME)
 }
@@ -123,7 +130,19 @@ function normalizeHarvestThresholds(value: unknown): HarvestThresholds | undefin
   }
   const raw = value as Record<string, unknown>
   const out: HarvestThresholds = {}
-  for (const k of ['gap_seconds', 'startup_seconds', 'rate_limit_seconds', 'max_pages'] as const) {
+
+  const intFields = [
+    'gap_seconds',
+    'startup_seconds',
+    'rate_limit_seconds',
+    'top',
+    'max_clicks',
+    'stuck_nudge_threshold',
+    'harvest_failure_backoff_base_seconds',
+    'harvest_failure_backoff_max_seconds',
+  ] as const
+
+  for (const k of intFields) {
     if (raw[k] !== undefined) {
       const v = raw[k]
       if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
@@ -132,6 +151,32 @@ function normalizeHarvestThresholds(value: unknown): HarvestThresholds | undefin
       out[k] = Math.floor(v)
     }
   }
+
+  // scroll_delay is a float (seconds), not floored
+  if (raw.scroll_delay !== undefined) {
+    const v = raw.scroll_delay
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      throw new Error('config.harvest.scroll_delay must be a non-negative finite number')
+    }
+    out.scroll_delay = v
+  }
+
+  // max_pages: deprecated — read tolerated, emit one warn, then drop from output
+  if (raw.max_pages !== undefined) {
+    const v = raw.max_pages
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      throw new Error('config.harvest.max_pages must be a non-negative finite number')
+    }
+    if (!maxPagesWarnEmitted) {
+      maxPagesWarnEmitted = true
+      process.stderr.write(
+        '[chronos-sync] config.harvest.max_pages is deprecated and ignored. ' +
+          'kakaocli 0.4.1 does not accept --max-pages. Use max_clicks instead.\n'
+      )
+    }
+    out.max_pages = Math.floor(v)
+  }
+
   return out
 }
 
@@ -184,7 +229,7 @@ export function clampInterval(n: number): number {
 export function emptyState(): DaemonState {
   return {
     rooms: {},
-    daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 },
+    daemon: { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0, last_harvest_at: 0 },
   }
 }
 
@@ -193,7 +238,13 @@ export async function loadState(): Promise<DaemonState> {
     const raw = await fs.readFile(statePath(), 'utf8')
     const parsed = JSON.parse(raw) as DaemonState
     if (!parsed.rooms || typeof parsed.rooms !== 'object') return emptyState()
-    if (!parsed.daemon) parsed.daemon = { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 }
+    if (!parsed.daemon) {
+      parsed.daemon = { started_at: Date.now(), last_cycle_at: 0, cycle_index: 0 }
+    }
+    // Forward-compat: 0.2.6 state files lack last_harvest_at; default to 0.
+    if (parsed.daemon.last_harvest_at === undefined) {
+      parsed.daemon.last_harvest_at = 0
+    }
     return parsed
   } catch {
     return emptyState()
