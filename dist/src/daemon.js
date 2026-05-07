@@ -29,6 +29,7 @@ import { resolveInterval } from './interval-resolver.js';
 import { DEFAULT_HARVEST_TOP, DEFAULT_HARVEST_MAX_CLICKS, DEFAULT_HARVEST_SCROLL_DELAY, DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD, DEFAULT_HARVEST_ENABLED, } from './types.js';
 import { decideCycleHarvest } from './harvest-detector.js';
 import { append } from './notifications.js';
+import { maybeStartCaffeinate, maybeStopCaffeinate } from './caffeinate.js';
 // Module-level daemon runtime state — reset on every runLoop start.
 let daemonRuntime = {
     last_harvest_at: 0,
@@ -354,13 +355,22 @@ export async function runLoop(options = {}) {
         process.stderr.write('chronos-sync: another instance already running\n');
         process.exit(0);
     }
+    const log = options.log ?? defaultLog;
     // Reset runtime state at loop start so restart gives a clean slate.
     daemonRuntime = {
         last_harvest_at: 0,
         consecutive_harvest_failures: 0,
         stuck_nudge_flags: {},
+        caffeinate_pid: undefined,
     };
-    const log = options.log ?? defaultLog;
+    // Foreground mode on darwin: keep the host awake while the daemon is
+    // running. `caffeinate -i -w <pid>` exits automatically when this
+    // process dies, so SIGKILL still releases the sleep policy.
+    const caffeinate = maybeStartCaffeinate({
+        foreground: options.foreground === true,
+        log,
+    });
+    daemonRuntime.caffeinate_pid = caffeinate.pid;
     let cfg = await loadConfig();
     const state = await loadState();
     state.daemon.started_at = Date.now();
@@ -433,6 +443,7 @@ export async function runLoop(options = {}) {
             return;
         shuttingDown = true;
         log('info', `received ${sig} — releasing lock and exiting`);
+        maybeStopCaffeinate({ pid: daemonRuntime.caffeinate_pid, log });
         releaseLock();
         process.exit(0);
     };

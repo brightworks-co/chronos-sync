@@ -187,4 +187,12 @@ export interface DaemonRuntime {
     consecutive_harvest_failures: number;
     /** Per-room flag tracking whether a stuck-nudge has been emitted for the current stuck sequence. */
     stuck_nudge_flags: Record<string, boolean>;
+    /**
+     * PID of the `caffeinate -i -w <pid>` child spawned in foreground mode to
+     * suppress macOS idle sleep. `undefined` when foreground mode is off, the
+     * host is not darwin, or `CHRONOS_NO_CAFFEINATE=1` disabled the guard.
+     * In-memory only — never persisted (a stale PID after crash would mis-kill
+     * an unrelated process).
+     */
+    caffeinate_pid?: number;
 }
