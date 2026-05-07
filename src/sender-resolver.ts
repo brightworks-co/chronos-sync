@@ -24,10 +24,13 @@
  *
  * Precision note
  * --------------
- * KakaoTalk userIds can exceed `Number.MAX_SAFE_INTEGER` (2^53 - 1). The
- * underlying `kakaocli messages` JSON also already loses precision for
- * such ids, so the same lossy representation appears on both sides — the
- * map is keyed by `String(sender_id)` to keep both sides aligned.
+ * KakaoTalk userIds can exceed `Number.MAX_SAFE_INTEGER` (2^53 - 1). 19-digit
+ * BigInt userIds (typical for open-chat senders) lose their last 2-3 digits
+ * to IEEE 754 rounding when fed through plain `JSON.parse`. We run the
+ * `kakaocli query` stdout through `preserveBigIntPrecision` (shared with the
+ * `kakaocli messages` parser) before `JSON.parse` so the map keys retain
+ * full precision and align exactly with the `String(sender_id)` lookup keys
+ * the caller uses.
  *
  * The `IN (...)` clause is built from numbers only; we re-validate that
  * every input is a finite number before stringifying so the query stays
@@ -35,6 +38,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { preserveBigIntPrecision } from './kakaocli.js'
 
 export interface ResolveSenderOptions {
   /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
@@ -137,7 +141,7 @@ export function parseQueryRows(stdout: string): Map<string, string> {
 
   let parsed: unknown
   try {
-    parsed = JSON.parse(trimmed)
+    parsed = JSON.parse(preserveBigIntPrecision(trimmed))
   } catch {
     return out
   }

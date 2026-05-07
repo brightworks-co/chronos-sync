@@ -48,9 +48,18 @@ export declare function listMessages(query: MessagesQuery): Promise<KakaoCliMess
  * cycle indefinitely).
  *
  * We rewrite known BigInt-shaped numeric fields to JSON strings before
- * `JSON.parse` so the exact digits survive. Downstream code
- * (`enrichSenders`, `resolveSenderNames.sanitizeIds`) already accepts
- * `number | string` for these fields.
+ * `JSON.parse` so the exact digits survive. Two emission shapes are
+ * covered:
+ *   1. Object form (`kakaocli messages --json`):
+ *      `"sender_id": 8181328792600516744`  →  `"sender_id": "8181..."`
+ *   2. Tuple form (`kakaocli query` 2-D array of `[userId, name]`):
+ *      `[6321186593654462422, "드림솔져"]`  →  `["6321...", "드림솔져"]`
+ *      Without this the v0.2.7 dho stuck regression happens — every 19-
+ *      digit open-chat sender resolves to a rounded map key that no
+ *      caller can match.
+ *
+ * Downstream code (`enrichSenders`, `resolveSenderNames.sanitizeIds`,
+ * `parseQueryRows`) already accepts `number | string` for these fields.
  */
 export declare function preserveBigIntPrecision(stdout: string): string;
 export interface HarvestQuery {
