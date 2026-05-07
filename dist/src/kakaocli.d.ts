@@ -34,6 +34,25 @@ export interface MessagesQuery {
  * wins to keep behavior aligned with the daemon's room dispatch.
  */
 export declare function listMessages(query: MessagesQuery): Promise<KakaoCliMessage[]>;
+/**
+ * KakaoTalk userIds (and chat ids, log ids) are 19-digit BigInts that
+ * exceed `Number.MAX_SAFE_INTEGER` (2^53 - 1 = 9007199254740992). When
+ * `JSON.parse` hits a bare number literal in that range it silently
+ * rounds the trailing digits to 0, e.g.
+ *
+ *   "sender_id": 8181328792600516744   →   8181328792600517000
+ *
+ * That breaks downstream lookups (the resolver's SQL `WHERE userId IN
+ * (...)` no longer matches the real NTUser row, every sender falls to
+ * the unresolved branch, and PR #7's strict-skip path stalls the
+ * cycle indefinitely).
+ *
+ * We rewrite known BigInt-shaped numeric fields to JSON strings before
+ * `JSON.parse` so the exact digits survive. Downstream code
+ * (`enrichSenders`, `resolveSenderNames.sanitizeIds`) already accepts
+ * `number | string` for these fields.
+ */
+export declare function preserveBigIntPrecision(stdout: string): string;
 export interface HarvestQuery {
     /** kakaocli chat display name. Mutually exclusive with `chatId`. */
     chat?: string;

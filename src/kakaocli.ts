@@ -63,14 +63,45 @@ export async function listMessages(
   const trimmed = stdout.trim()
   if (!trimmed) return []
 
+  const safe = preserveBigIntPrecision(trimmed)
+
   // Tolerate both `[ {...}, {...} ]` and NDJSON (`{...}\n{...}`).
-  if (trimmed.startsWith('[')) {
-    const parsed = JSON.parse(trimmed) as KakaoCliMessage[]
+  if (safe.startsWith('[')) {
+    const parsed = JSON.parse(safe) as KakaoCliMessage[]
     return Array.isArray(parsed) ? parsed : []
   }
 
-  const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0)
+  const lines = safe.split(/\r?\n/).filter((l) => l.trim().length > 0)
   return lines.map((l) => JSON.parse(l) as KakaoCliMessage)
+}
+
+/**
+ * KakaoTalk userIds (and chat ids, log ids) are 19-digit BigInts that
+ * exceed `Number.MAX_SAFE_INTEGER` (2^53 - 1 = 9007199254740992). When
+ * `JSON.parse` hits a bare number literal in that range it silently
+ * rounds the trailing digits to 0, e.g.
+ *
+ *   "sender_id": 8181328792600516744   →   8181328792600517000
+ *
+ * That breaks downstream lookups (the resolver's SQL `WHERE userId IN
+ * (...)` no longer matches the real NTUser row, every sender falls to
+ * the unresolved branch, and PR #7's strict-skip path stalls the
+ * cycle indefinitely).
+ *
+ * We rewrite known BigInt-shaped numeric fields to JSON strings before
+ * `JSON.parse` so the exact digits survive. Downstream code
+ * (`enrichSenders`, `resolveSenderNames.sanitizeIds`) already accepts
+ * `number | string` for these fields.
+ */
+export function preserveBigIntPrecision(stdout: string): string {
+  // Match `"key": <16+ digit number>` as a value (whitespace tolerant)
+  // for the BigInt-shaped fields kakaocli emits. 16 digits is below
+  // Number.MAX_SAFE_INTEGER but the cost of quoting a safe integer is
+  // zero — the receiver tolerates strings either way.
+  return stdout.replace(
+    /"(sender_id|chat_id|id|logId|userId)"(\s*):(\s*)(\d{16,})/g,
+    '"$1"$2:$3"$4"'
+  )
 }
 
 export interface HarvestQuery {
