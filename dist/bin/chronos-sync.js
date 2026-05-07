@@ -165,6 +165,7 @@ function runForeground() {
             view.printHeader(bannerCfg);
             let headerRefreshed = false;
             const runOptions = {
+                foreground: true,
                 // Quiet logger: only surface warnings/errors so the cycle
                 // lines stay the primary signal. info-level events (config
                 // reload, startup) are intentionally swallowed in fg mode.

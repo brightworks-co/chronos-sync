@@ -117,6 +117,15 @@ export interface RunOptions {
         reason: HarvestReason;
         code?: number;
     }) => void;
+    /**
+     * When true the loop spawns `caffeinate -i -w <pid>` on darwin so macOS
+     * does not idle-sleep while the daemon is running. The launchd path
+     * leaves this off (launchd controls wake/sleep itself); the foreground
+     * `chronos-sync` invocation opts in.
+     *
+     * Skipped on non-darwin hosts and when `CHRONOS_NO_CAFFEINATE=1` is set.
+     */
+    foreground?: boolean;
 }
 /**
  * Long-running entry point — the loop body shared by `daemon` (launchd

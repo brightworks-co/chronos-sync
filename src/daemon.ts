@@ -45,6 +45,7 @@ import {
 } from './types.js'
 import { decideCycleHarvest, type HarvestReason } from './harvest-detector.js'
 import { append } from './notifications.js'
+import { maybeStartCaffeinate, maybeStopCaffeinate } from './caffeinate.js'
 
 interface CycleOutcome {
   /** Number of rooms with new messages uploaded this cycle. */
@@ -471,6 +472,15 @@ export interface RunOptions {
    * Foreground UIs use this to surface harvest events to the user.
    */
   onHarvest?: (info: { roomName: string; reason: HarvestReason; code?: number }) => void
+  /**
+   * When true the loop spawns `caffeinate -i -w <pid>` on darwin so macOS
+   * does not idle-sleep while the daemon is running. The launchd path
+   * leaves this off (launchd controls wake/sleep itself); the foreground
+   * `chronos-sync` invocation opts in.
+   *
+   * Skipped on non-darwin hosts and when `CHRONOS_NO_CAFFEINATE=1` is set.
+   */
+  foreground?: boolean
 }
 
 /**
@@ -487,14 +497,25 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
     process.exit(0)
   }
 
+  const log = options.log ?? defaultLog
+
   // Reset runtime state at loop start so restart gives a clean slate.
   daemonRuntime = {
     last_harvest_at: 0,
     consecutive_harvest_failures: 0,
     stuck_nudge_flags: {},
+    caffeinate_pid: undefined,
   }
 
-  const log = options.log ?? defaultLog
+  // Foreground mode on darwin: keep the host awake while the daemon is
+  // running. `caffeinate -i -w <pid>` exits automatically when this
+  // process dies, so SIGKILL still releases the sleep policy.
+  const caffeinate = maybeStartCaffeinate({
+    foreground: options.foreground === true,
+    log,
+  })
+  daemonRuntime.caffeinate_pid = caffeinate.pid
+
   let cfg = await loadConfig()
   const state = await loadState()
   state.daemon.started_at = Date.now()
@@ -569,6 +590,7 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
     if (shuttingDown) return
     shuttingDown = true
     log('info', `received ${sig} — releasing lock and exiting`)
+    maybeStopCaffeinate({ pid: daemonRuntime.caffeinate_pid, log })
     releaseLock()
     process.exit(0)
   }
