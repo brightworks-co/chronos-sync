@@ -144,6 +144,12 @@ function normalizeHarvestThresholds(value) {
         }
         out.max_pages = Math.floor(v);
     }
+    if (raw.enabled !== undefined) {
+        if (typeof raw.enabled !== 'boolean') {
+            throw new Error('config.harvest.enabled must be a boolean when present');
+        }
+        out.enabled = raw.enabled;
+    }
     return out;
 }
 /**

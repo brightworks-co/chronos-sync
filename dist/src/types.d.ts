@@ -70,6 +70,20 @@ export interface DaemonConfig {
     rooms: RoomConfig[];
 }
 export interface HarvestThresholds {
+    /**
+     * Enable automatic cycle-scope harvest. Default `false` as of v0.2.9.
+     *
+     * Rationale: KakaoTalk macOS auto-populates NTUser/NTMultiProfile when push
+     * messages arrive in the foreground app, so an explicit `harvest --scroll`
+     * is rarely required for steady-state sync. The auto-spawn was disruptive
+     * in real-world use (KakaoTalk window stealing focus, unread chats getting
+     * skipped anyway). With this flag off, the daemon never spawns harvest;
+     * users who want a one-off backfill should run `chronos-sync harvest`.
+     *
+     * v0.2.7/0.2.8 behaved as if this flag were `true`. Set `enabled: true` in
+     * config.json to keep that behavior.
+     */
+    enabled?: boolean;
     /** Gap threshold (sec). Gap between previous cycle last message and new message timestamp; triggers harvest when exceeded. Default 12h (43200). */
     gap_seconds?: number;
     /** Startup threshold (sec). On daemon first cycle, triggers harvest when last_message_at is older than this value. Default 24h (86400). */
@@ -157,6 +171,11 @@ export declare const DEFAULT_HARVEST_SCROLL_DELAY = 1.5;
 export declare const DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD = 5;
 export declare const DEFAULT_HARVEST_FAILURE_BACKOFF_BASE_SECONDS = 1800;
 export declare const DEFAULT_HARVEST_FAILURE_BACKOFF_MAX_SECONDS = 28800;
+/**
+ * Default for `HarvestThresholds.enabled`. v0.2.9 changed this from `true`
+ * (the v0.2.7/0.2.8 implicit behavior) to `false`. See JSDoc on `enabled`.
+ */
+export declare const DEFAULT_HARVEST_ENABLED = false;
 /**
  * In-memory only runtime state for the daemon. NOT persisted to state.json.
  * Reset to defaults on every process start.

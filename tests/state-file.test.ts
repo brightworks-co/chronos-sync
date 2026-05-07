@@ -419,6 +419,23 @@ describe('loadConfig — harvest new fields accepted', () => {
     expect(cfg.harvest?.max_pages).toBe(5)
   })
 
+  it('accepts harvest.enabled boolean and rejects non-boolean values', async () => {
+    await writeConfig({ ...validBase, harvest: { enabled: true } })
+    let cfg = await loadConfig()
+    expect(cfg.harvest?.enabled).toBe(true)
+
+    await writeConfig({ ...validBase, harvest: { enabled: false } })
+    cfg = await loadConfig()
+    expect(cfg.harvest?.enabled).toBe(false)
+
+    await writeConfig({ ...validBase, harvest: {} })
+    cfg = await loadConfig()
+    expect(cfg.harvest?.enabled).toBeUndefined()
+
+    await writeConfig({ ...validBase, harvest: { enabled: 'yes' } })
+    await expect(loadConfig()).rejects.toThrow(/enabled.*boolean/)
+  })
+
   it('AC-12: max_pages deprecation warn emitted exactly once across multiple loadConfig calls', async () => {
     const { resetMaxPagesWarnForTest } = await import('../src/state-file')
     resetMaxPagesWarnForTest()

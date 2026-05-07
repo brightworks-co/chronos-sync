@@ -94,6 +94,16 @@ switch (cmd) {
     })
     break
 
+  case 'harvest':
+    import('../src/cli/harvest.js').then(async (m) => {
+      const result = await m.runHarvest(args)
+      process.exit(result.exitCode)
+    }).catch((err: unknown) => {
+      process.stderr.write('chronos-sync: harvest error: ' + String(err) + '\n')
+      process.exit(1)
+    })
+    break
+
   case 'health':
     import('../src/state-file.js').then(async (stateModule) => {
       const { checkHealth } = await import('../src/health.js')
@@ -139,6 +149,9 @@ function printUsage(): void {
   interval <초>             동기화 주기 변경 (10~3600). 데몬 다음 cycle 자동 반영.
   interval --get            현재 동기화 주기 조회 (web KV 기준).
   diagnose senders [chat]   참여자_<id> 폴백 원인 분석 (특정 룸의 sender_id 별 NTUser 매칭)
+  harvest                   KakaoTalk UI 자동 스크롤 1회 실행 (수동 backfill).
+                            옵션: --top N, --max-clicks N, --scroll-delay S, --dry-run
+                            v0.2.9부터 cycle harvest는 default off — 필요 시 이 명령 사용.
   daemon                    백그라운드 루프 (launchd 전용, 일반 사용자 비권장)
   version                   버전 표시
   help                      도움말 표시

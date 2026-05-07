@@ -88,4 +88,28 @@ describe('reassembleMacCsv', () => {
     expect(csv).toContain('"카카오봇"')
     expect(csv).toContain('"오픈채팅 메시지"')
   })
+
+  it('rewrites feedType system-event payloads to localized placeholders', () => {
+    const csv = reassembleMacCsv([
+      msg({
+        id: 1,
+        sender: '드림솔져(헬)',
+        text: '{"feedType":25,"logId":3835554415426912257,"hidden":true,"targetRevision":1}',
+      }),
+      msg({
+        id: 2,
+        sender: '시스템',
+        text: '{"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"드림솔져"}]}',
+        timestamp: Date.UTC(2026, 3, 26, 0, 1, 0),
+      }),
+    ])
+    const parsed = parseMacCsv(csv)
+    expect(parsed.messages).toHaveLength(2)
+    expect(parsed.messages[0].text).toBe('삭제된 메시지')
+    expect(parsed.messages[0].kind).toBe('deleted')
+    expect(parsed.messages[1].text).toBe('드림솔져님이 들어왔습니다')
+    expect(parsed.messages[1].kind).toBe('announcement')
+    // Raw JSON must not leak into the CSV
+    expect(csv).not.toContain('feedType')
+  })
 })
