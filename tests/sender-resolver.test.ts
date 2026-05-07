@@ -13,15 +13,15 @@ describe('parseQueryRows', () => {
 
   it('parses 2-D array of [userId, name] tuples (within safe-integer range)', () => {
     const stdout = JSON.stringify([
-      [42, '핑님'],
-      [99, '새싹간호사(H)'],
-      [12345, '호랑아밥먹어(E)'],
+      [42, '이몽룡'],
+      [99, '참가자A(H)'],
+      [12345, '참가자B(E)'],
     ])
     const map = parseQueryRows(stdout)
     expect(map.size).toBe(3)
-    expect(map.get('42')).toBe('핑님')
-    expect(map.get('99')).toBe('새싹간호사(H)')
-    expect(map.get('12345')).toBe('호랑아밥먹어(E)')
+    expect(map.get('42')).toBe('이몽룡')
+    expect(map.get('99')).toBe('참가자A(H)')
+    expect(map.get('12345')).toBe('참가자B(E)')
   })
 
   it('keys by String(numericId) — both sides observe the same JS-rounded value', () => {
@@ -31,9 +31,9 @@ describe('parseQueryRows', () => {
     // suffers the identical rounding, so callers always look up under
     // the same key. We simulate that real-world shape here.
     const id = Number(5283788016742773350) // already 5283788016742774000
-    const stdout = `[[${id}, "핑님"]]`
+    const stdout = `[[${id}, "이몽룡"]]`
     const map = parseQueryRows(stdout)
-    expect(map.get(String(id))).toBe('핑님')
+    expect(map.get(String(id))).toBe('이몽룡')
   })
 
   it('accepts userId as a string and preserves precision', () => {
