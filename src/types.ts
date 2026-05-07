@@ -138,13 +138,25 @@ export interface RoomState {
 
 export type IntervalSource = 'server' | 'cached' | 'config' | 'default'
 
+/**
+ * Persisted interval cache shape from v0.2.x. v0.3.0+ no longer writes
+ * this field (the cache lives in `src/interval-resolver.ts` module
+ * state, primed at boot and on SIGHUP). The interface stays for
+ * read-side backward compatibility — older state.json files are loaded
+ * without error, and the field is simply ignored on read.
+ *
+ * `consecutive_failures` and `skip_until_cycle` are optional with
+ * default 0 because the v0.3.0 reader does not depend on them; a
+ * strict schema validator must not reject either an absent or zero
+ * value. Both fields are slated for removal in a future release.
+ */
 export interface IntervalCache {
   value: number
   fetched_at: string
   source: IntervalSource
-  consecutive_failures: number
+  consecutive_failures?: number
   /** Cycle counter (monotonic) at which the next fetch should resume after circuit-open. 0 = not in skip mode. */
-  skip_until_cycle: number
+  skip_until_cycle?: number
 }
 
 export interface DaemonState {

@@ -25,7 +25,7 @@ import { resolveSenderNames } from './sender-resolver.js';
 import { Uploader, UploadError } from './uploader.js';
 import { checkHealth } from './health.js';
 import { acquireLock, loadConfig, loadState, saveState, getRoomState, setRoomState, releaseLock, } from './state-file.js';
-import { resolveInterval } from './interval-resolver.js';
+import { primeIntervalCache, getCachedInterval, } from './interval-resolver.js';
 import { DEFAULT_HARVEST_TOP, DEFAULT_HARVEST_MAX_CLICKS, DEFAULT_HARVEST_SCROLL_DELAY, DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD, DEFAULT_HARVEST_ENABLED, } from './types.js';
 import { decideCycleHarvest } from './harvest-detector.js';
 import { append } from './notifications.js';
@@ -75,7 +75,7 @@ async function evaluateStuckNudge(state, cfg, log) {
  */
 export async function runCycle(cfg, state, log = defaultLog, onRoom, onHarvest) {
     state.daemon.cycle_index += 1;
-    const resolved = await resolveInterval(cfg, state, { now: Date.now, log });
+    const resolved = getCachedInterval(cfg, log);
     // Daemon-scope harvest decision (pre-loop, cycle-scoped, ≤1 spawn per cycle).
     const cycleDecision = decideCycleHarvest({
         rooms: state.rooms,
@@ -374,6 +374,12 @@ export async function runLoop(options = {}) {
     let cfg = await loadConfig();
     const state = await loadState();
     state.daemon.started_at = Date.now();
+    // Prime the in-memory interval cache once at boot. v0.3.0 (Option B):
+    // the cycle loop no longer issues a per-cycle GET — refresh happens
+    // here and on SIGHUP. `primeIntervalCache` swallows fetch errors and
+    // never throws, so this await is fail-soft (cycle 0 falls back to
+    // `cfg.interval_seconds` when the prime fails).
+    await primeIntervalCache(cfg, log);
     // Probe harvest capabilities once at boot — only when harvest is enabled.
     // v0.2.9 changed `enabled` default to false (see HarvestThresholds JSDoc):
     // KakaoTalk auto-populates NTUser on incoming push messages, so steady-state
@@ -435,6 +441,11 @@ export async function runLoop(options = {}) {
                     error: err instanceof Error ? err.message : String(err),
                 });
             }
+            // Refresh the interval cache from the server (Option B). The
+            // in-flight mutex inside `primeIntervalCache` deduplicates rapid
+            // SIGHUP bursts, so two signals within the fetch window produce
+            // exactly one HTTP call. Errors are swallowed inside prime.
+            void primeIntervalCache(cfg, log);
         })();
     });
     let shuttingDown = false;
