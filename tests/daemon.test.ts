@@ -269,7 +269,7 @@ describe('runCycle', () => {
       },
     ])
     vi.mocked(resolveSenderNames).mockResolvedValue(
-      new Map([['5283788016742773350', '핑님']])
+      new Map([['5283788016742773350', '이몽룡']])
     )
 
     const state = emptyState()
@@ -286,7 +286,7 @@ describe('runCycle', () => {
       {
         chat_id: 1,
         id: 1,
-        sender: '핑님',
+        sender: '이몽룡',
         sender_id: 1,
         text: '안녕',
         timestamp: ts,
@@ -375,9 +375,9 @@ describe('enrichSenders', () => {
   }
 
   it('replaces null sender with NTUser-resolved name', async () => {
-    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([[lossyKey, '핑님']]))
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([[lossyKey, '이몽룡']]))
     const out = await enrichSenders([row()], undefined, () => {})
-    expect(out[0].sender).toBe('핑님')
+    expect(out[0].sender).toBe('이몽룡')
   })
 
   it('leaves sender as null when name not found (caller holds back the cycle — no 참여자_<id> ever sent)', async () => {
@@ -604,7 +604,7 @@ describe('runCycle — strict skip on unresolved senders (no 참여자_<id> ever
       mkMsgNullSender(2, ts2, 222),
     ])
     // 111 resolves, 222 does NOT — cycle must skip everything.
-    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['111', '핑님']]))
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map([['111', '이몽룡']]))
     const state = emptyState()
     state.rooms['p1:room-a'] = {
       last_synced_ms: cursor,

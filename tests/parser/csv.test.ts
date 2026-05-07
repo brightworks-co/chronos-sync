@@ -5,10 +5,10 @@ describe('parseMacCsv — date formats and empty-text handling', () => {
   it('parses dotted variable-width Mac KakaoTalk export dates (e.g. `2026.5.5 0:02`)', () => {
     const raw = [
       'Date,User,Message',
-      '2026.5.5 0:02,얄파,크으',
-      '2026.5.5 0:02,얄파,은정님은 찐 요리사!',
-      '2026.5.5 22:15,새싹간호사(H),밤 인사',
-      '2026.10.7 9:30,키루파(A),아침 인사',
+      '2026.5.5 0:02,김영희,크으',
+      '2026.5.5 0:02,김영희,참가자D는 찐 요리사!',
+      '2026.5.5 22:15,참가자A(H),밤 인사',
+      '2026.10.7 9:30,참가자B(A),아침 인사',
     ].join('\n')
 
     const result = parseMacCsv(raw)
@@ -30,8 +30,8 @@ describe('parseMacCsv — date formats and empty-text handling', () => {
   it('still parses the legacy zero-padded dashed format (backward compat with reassembled CSVs from kakaocli)', () => {
     const raw = [
       'Date,User,Message',
-      '2026-05-05 10:14:00,초롱반딧불,아침',
-      '2026-05-05 10:14:30,초롱반딧불,또 아침',
+      '2026-05-05 10:14:00,김철수,아침',
+      '2026-05-05 10:14:30,김철수,또 아침',
     ].join('\n')
 
     const result = parseMacCsv(raw)

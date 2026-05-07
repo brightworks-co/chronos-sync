@@ -117,11 +117,11 @@ describe('runDiagnoseSenders', () => {
 
   it('classifies already_resolved + is_from_me + lookup-needed correctly', async () => {
     vi.mocked(listMessages).mockResolvedValueOnce([
-      makeMsg(1, '핑님', 'hello'),
+      makeMsg(1, '이몽룡', 'hello'),
       makeMsg(2, null, 'self', true),
       makeMsg(3, null, 'group msg'),
     ])
-    vi.mocked(resolveSenderNames).mockResolvedValueOnce(new Map([['3000', '새싹간호사']]))
+    vi.mocked(resolveSenderNames).mockResolvedValueOnce(new Map([['3000', '참가자A']]))
     const out = new StringStream()
     const err = new StringStream()
     const result = await runDiagnoseSenders('테스트 채팅', out, err)
@@ -129,7 +129,7 @@ describe('runDiagnoseSenders', () => {
     const text = out.text()
     expect(text).toMatch(/이미 해결됨.*1/)
     expect(text).toMatch(/is_from_me.*1/)
-    expect(text).toMatch(/RESOLVED.*id=3000.*새싹간호사/s)
+    expect(text).toMatch(/RESOLVED.*id=3000.*참가자A/s)
   })
 
   it('marks fallback_absent when NTUser probe returns 0 (id missing)', async () => {
