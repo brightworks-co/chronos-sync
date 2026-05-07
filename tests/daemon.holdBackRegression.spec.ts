@@ -18,12 +18,14 @@ import type { DaemonConfig } from '../src/types'
 import type { KakaoCliMessage } from '../src/csv-reassemble'
 
 vi.mock('../src/interval-resolver', () => ({
-  resolveInterval: vi.fn().mockResolvedValue({
+  primeIntervalCache: vi.fn().mockResolvedValue(undefined),
+  getCachedInterval: vi.fn().mockReturnValue({
     value: 60,
     source: 'config',
     fetched_at: new Date().toISOString(),
     warning: null,
   }),
+  resetIntervalCacheForTest: vi.fn(),
 }))
 
 vi.mock('../src/kakaocli', () => ({

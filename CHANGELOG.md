@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Added
+
+- **Foreground macOS sleep prevention via `caffeinate -i -w <pid>` self-attach.** When you run `chronos-sync` in a terminal on macOS, the daemon now spawns `caffeinate` as a child so the host does not idle-sleep while the loop is running. The `-w` flag ties caffeinate's lifetime to the daemon pid, so caffeinate exits on its own when the daemon dies (including SIGKILL) — the sleep policy reverts automatically, no leftover assertion. Skipped when (a) running under launchd (which controls wake/sleep itself via `KeepAlive`), (b) host is not darwin, or (c) `CHRONOS_NO_CAFFEINATE=1` is set (operator manages sleep externally via `pmset` / Amphetamine). The caffeinate PID lives on `DaemonRuntime` in-memory only, never persisted. ([ADR 0009 Part A](docs/adr/0009-interval-cache-refresh-policy.md))
+
+### Changed (BREAKING for users who change interval via web UI mid-run)
+
+- **`chronos-sync` no longer issues a per-cycle GET to `/api/account/settings/sync`.** The interval cache is primed exactly twice in normal operation: once at boot (right after `loadConfig`) and once per `kill -HUP <pid>` (alongside the existing config reload). To pick up a new interval set via web UI or `chronos-sync interval <seconds>`, either restart the daemon or send SIGHUP. Concurrent SIGHUP signals are deduplicated by an in-flight mutex inside `primeIntervalCache`. Boot fetch failures are swallowed (fail-soft) — cycle 0 falls back to `cfg.interval_seconds` or `DEFAULT_INTERVAL_SECONDS`. ([ADR 0009 Part B](docs/adr/0009-interval-cache-refresh-policy.md))
+
+### Deprecated
+
+- `IntervalCache.consecutive_failures` and `IntervalCache.skip_until_cycle` are now optional and unused at runtime — the cycle loop no longer increments them because there is no longer a per-cycle fetch to fail. The fields stay on the schema for state-file backward compatibility (older `~/.chronos/state.json` writes still parse) and will be removed in a later release.
+
+### Notes
+
+- SIGHUP now serves three purposes in foreground mode (farewell printout, config reload, interval cache prime). Each listener is registered separately and Node fires all of them; functionally fine today. v0.3.1 follow-up will drop the foreground farewell listener so SIGHUP semantics collapse to "reload + interval".
+- Long-running launchd daemons can let the cache age past `MAX_CACHE_AGE_MS = 24h`; the reader returns the cached value with a warning string. Foreground header surfaces the warning; launchd path only writes it to the JSONL log. v0.3.1 follow-up will append an `error_user_actionable` notification when the cache crosses 24h on launchd.
+
 ## 0.2.9 (2026-05-08)
 
 ### Changed (BREAKING for users who relied on auto-harvest)

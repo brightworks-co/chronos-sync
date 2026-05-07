@@ -34,7 +34,11 @@ import {
   setRoomState,
   releaseLock,
 } from './state-file.js'
-import { resolveInterval, type ResolvedInterval } from './interval-resolver.js'
+import {
+  primeIntervalCache,
+  getCachedInterval,
+  type ResolvedInterval,
+} from './interval-resolver.js'
 import type { DaemonConfig, DaemonState, RoomConfig, DaemonRuntime } from './types.js'
 import {
   DEFAULT_HARVEST_TOP,
@@ -132,7 +136,7 @@ export async function runCycle(
   onHarvest?: RunOptions['onHarvest']
 ): Promise<{ outcome: CycleOutcome; resolved: ResolvedInterval }> {
   state.daemon.cycle_index += 1
-  const resolved = await resolveInterval(cfg, state, { now: Date.now, log })
+  const resolved = getCachedInterval(cfg, log)
 
   // Daemon-scope harvest decision (pre-loop, cycle-scoped, ≤1 spawn per cycle).
   const cycleDecision = decideCycleHarvest({
@@ -520,6 +524,13 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   const state = await loadState()
   state.daemon.started_at = Date.now()
 
+  // Prime the in-memory interval cache once at boot. v0.3.0 (Option B):
+  // the cycle loop no longer issues a per-cycle GET — refresh happens
+  // here and on SIGHUP. `primeIntervalCache` swallows fetch errors and
+  // never throws, so this await is fail-soft (cycle 0 falls back to
+  // `cfg.interval_seconds` when the prime fails).
+  await primeIntervalCache(cfg, log)
+
   // Probe harvest capabilities once at boot — only when harvest is enabled.
   // v0.2.9 changed `enabled` default to false (see HarvestThresholds JSDoc):
   // KakaoTalk auto-populates NTUser on incoming push messages, so steady-state
@@ -582,6 +593,11 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
           error: err instanceof Error ? err.message : String(err),
         })
       }
+      // Refresh the interval cache from the server (Option B). The
+      // in-flight mutex inside `primeIntervalCache` deduplicates rapid
+      // SIGHUP bursts, so two signals within the fetch window produce
+      // exactly one HTTP call. Errors are swallowed inside prime.
+      void primeIntervalCache(cfg, log)
     })()
   })
 

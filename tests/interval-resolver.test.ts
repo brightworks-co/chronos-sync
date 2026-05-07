@@ -1,8 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { resolveInterval } from '../src/interval-resolver.js'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import {
+  primeIntervalCache,
+  getCachedInterval,
+  resetIntervalCacheForTest,
+} from '../src/interval-resolver.js'
 import * as apiClient from '../src/api-client.js'
 import { ApiPatAuthError } from '../src/api-client.js'
-import { DEFAULT_INTERVAL_SECONDS, type DaemonConfig, type DaemonState } from '../src/types.js'
+import { DEFAULT_INTERVAL_SECONDS, type DaemonConfig } from '../src/types.js'
 
 vi.mock('../src/api-client.js', () => ({
   getSyncSettings: vi.fn(),
@@ -14,7 +18,7 @@ vi.mock('../src/api-client.js', () => ({
   },
 }))
 
-const BASE_NOW = 1_000_000_000_000
+const log = vi.fn()
 
 function makeConfig(interval_seconds = 120): DaemonConfig {
   return {
@@ -25,163 +29,179 @@ function makeConfig(interval_seconds = 120): DaemonConfig {
   }
 }
 
-function makeState(overrides: Partial<DaemonState> = {}): DaemonState {
-  return {
-    rooms: {},
-    daemon: { started_at: BASE_NOW, last_cycle_at: BASE_NOW, cycle_index: 0 },
-    ...overrides,
-  }
-}
-
-const noop = () => {}
-const log = vi.fn()
-
-const deps = { now: () => BASE_NOW, log }
-
 beforeEach(() => {
+  resetIntervalCacheForTest()
   vi.clearAllMocks()
 })
 
-// 1. 정상 fetch → source='server', warning null, cache 갱신
-it('scenario 1: successful fetch returns server source with null warning', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({ interval_seconds: 180, updated_at: '2026-01-01T00:00:00Z' })
-  const state = makeState()
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('server')
-  expect(result.value).toBe(180)
-  expect(result.warning).toBeNull()
-  expect(state.interval_cache?.value).toBe(180)
-  expect(state.interval_cache?.consecutive_failures).toBe(0)
-  expect(state.interval_cache?.skip_until_cycle).toBe(0)
-})
-
-// 2. 401 → source='cached' (cache 있음), warning includes 'PAT'
-it('scenario 2: 401 with cache returns cached source and PAT warning', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new ApiPatAuthError())
-  const cachedAt = new Date(BASE_NOW - 1000).toISOString()
-  const state = makeState({
-    interval_cache: { value: 200, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
-  })
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('cached')
-  expect(result.value).toBe(200)
-  expect(result.warning).toContain('PAT')
-  // consecutive_failures must NOT be incremented for 401
-  expect(state.interval_cache?.consecutive_failures).toBe(0)
-})
-
-// 3. 401 + cache 없음 → source='config', warning includes 'PAT' + 'config'
-it('scenario 3: 401 without cache falls back to config', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new ApiPatAuthError())
-  const state = makeState()
-  const result = await resolveInterval(makeConfig(90), state, deps)
-  expect(result.source).toBe('config')
-  expect(result.value).toBe(90)
-  expect(result.warning).toContain('PAT')
-})
-
-// 4. 500 1회 → source='cached', failures=1, skip_until_cycle=0
-it('scenario 4: single generic failure increments failures without opening circuit', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new Error('HTTP 500'))
-  const cachedAt = new Date(BASE_NOW - 1000).toISOString()
-  const state = makeState({
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
-  })
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('cached')
-  expect(state.interval_cache?.consecutive_failures).toBe(1)
-  expect(state.interval_cache?.skip_until_cycle).toBe(0)
-})
-
-// 5. 500 3회 연속 → 3회차에서 circuit open: skip_until_cycle = cycle_index + 5
-it('scenario 5: three consecutive failures open the circuit breaker', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValue(new Error('HTTP 500'))
-  const cachedAt = new Date(BASE_NOW - 1000).toISOString()
-  const state = makeState({
-    daemon: { started_at: BASE_NOW, last_cycle_at: BASE_NOW, cycle_index: 10 },
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
+describe('primeIntervalCache', () => {
+  it('A4: populates the cache from a successful server fetch', async () => {
+    vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({
+      interval_seconds: 180,
+      updated_at: '2026-05-08T00:00:00Z',
+    })
+    await primeIntervalCache(makeConfig(), log)
+    const result = getCachedInterval(makeConfig(), log)
+    expect(result.value).toBe(180)
+    expect(result.source).toBe('cached')
   })
 
-  // 1st failure
-  await resolveInterval(makeConfig(), state, deps)
-  expect(state.interval_cache?.consecutive_failures).toBe(1)
-  expect(state.interval_cache?.skip_until_cycle).toBe(0)
+  it('A7: swallows network errors so the daemon boot path is fail-soft', async () => {
+    vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(
+      new Error('ECONNREFUSED')
+    )
+    await expect(primeIntervalCache(makeConfig(), log)).resolves.toBeUndefined()
+    // Cache stays empty → getCachedInterval falls back to config.
+    const result = getCachedInterval(makeConfig(90), log)
+    expect(result.source).toBe('config')
+    expect(result.value).toBe(90)
+  })
 
-  // 2nd failure
-  await resolveInterval(makeConfig(), state, deps)
-  expect(state.interval_cache?.consecutive_failures).toBe(2)
-  expect(state.interval_cache?.skip_until_cycle).toBe(0)
+  it('A7: swallows ApiPatAuthError', async () => {
+    vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new ApiPatAuthError())
+    await expect(primeIntervalCache(makeConfig(), log)).resolves.toBeUndefined()
+    const result = getCachedInterval(makeConfig(45), log)
+    expect(result.source).toBe('config')
+    expect(result.value).toBe(45)
+  })
 
-  // 3rd failure — circuit opens
-  await resolveInterval(makeConfig(), state, deps)
-  expect(state.interval_cache?.consecutive_failures).toBe(3)
-  expect(state.interval_cache?.skip_until_cycle).toBe(10 + 5)
+  it('A8: deduplicates concurrent SIGHUP refreshes via in-flight mutex', async () => {
+    let resolveFetch: (v: { interval_seconds: number; updated_at: string }) => void = () => {}
+    vi.mocked(apiClient.getSyncSettings).mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveFetch = res
+        })
+    )
+    const cfg = makeConfig()
+
+    const p1 = primeIntervalCache(cfg, log)
+    const p2 = primeIntervalCache(cfg, log)
+    const p3 = primeIntervalCache(cfg, log)
+
+    // All three callers received the same in-flight promise.
+    expect(p1).toBe(p2)
+    expect(p2).toBe(p3)
+
+    resolveFetch({ interval_seconds: 200, updated_at: '2026-05-08T00:00:00Z' })
+    await Promise.all([p1, p2, p3])
+
+    expect(apiClient.getSyncSettings).toHaveBeenCalledTimes(1)
+    const result = getCachedInterval(cfg, log)
+    expect(result.value).toBe(200)
+  })
+
+  it('A8: a fresh prime after the previous one settles re-fetches', async () => {
+    vi.mocked(apiClient.getSyncSettings)
+      .mockResolvedValueOnce({ interval_seconds: 100, updated_at: 't1' })
+      .mockResolvedValueOnce({ interval_seconds: 250, updated_at: 't2' })
+
+    await primeIntervalCache(makeConfig(), log)
+    expect(getCachedInterval(makeConfig(), log).value).toBe(100)
+
+    await primeIntervalCache(makeConfig(), log)
+    expect(apiClient.getSyncSettings).toHaveBeenCalledTimes(2)
+    expect(getCachedInterval(makeConfig(), log).value).toBe(250)
+  })
 })
 
-// 6. circuit open 동안 (cycle_index < skip_until) GET skip, source='cached'
-it('scenario 6: circuit open skips GET and returns cached value', async () => {
-  const cachedAt = new Date(BASE_NOW - 1000).toISOString()
-  const state = makeState({
-    daemon: { started_at: BASE_NOW, last_cycle_at: BASE_NOW, cycle_index: 12 },
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 3, skip_until_cycle: 15 },
+describe('getCachedInterval', () => {
+  it('A4: returns the cached value with source=cached after a successful prime', async () => {
+    vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({
+      interval_seconds: 180,
+      updated_at: 't',
+    })
+    await primeIntervalCache(makeConfig(), log)
+    const result = getCachedInterval(makeConfig(), log)
+    expect(result.source).toBe('cached')
+    expect(result.value).toBe(180)
+    expect(result.warning).toBeNull()
   })
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('cached')
-  expect(result.warning).toContain('캐시된 값 사용 중')
-  expect(apiClient.getSyncSettings).not.toHaveBeenCalled()
+
+  it('A7: falls back to config.interval_seconds when no cache exists', () => {
+    const result = getCachedInterval(makeConfig(90), log)
+    expect(result.source).toBe('config')
+    expect(result.value).toBe(90)
+    expect(result.warning).toContain('config bootstrap')
+  })
+
+  it('A7: falls back to DEFAULT_INTERVAL_SECONDS when neither cache nor config is available', () => {
+    const result = getCachedInterval(makeConfig(0), log)
+    expect(result.source).toBe('default')
+    expect(result.value).toBe(DEFAULT_INTERVAL_SECONDS)
+    expect(result.warning).toContain('default')
+  })
+
+  it('emits a stale warning when the cache is between 20h and 24h old', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-05-08T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({
+        interval_seconds: 150,
+        updated_at: 't',
+      })
+      await primeIntervalCache(makeConfig(), log)
+
+      vi.setSystemTime(t0 + 21 * 3600 * 1000) // 21h later
+      const result = getCachedInterval(makeConfig(), log)
+      expect(result.source).toBe('cached')
+      expect(result.value).toBe(150)
+      expect(result.warning).toContain('20h')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('escalates the warning when the cache is at least 24h old', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-05-08T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({
+        interval_seconds: 150,
+        updated_at: 't',
+      })
+      await primeIntervalCache(makeConfig(), log)
+
+      vi.setSystemTime(t0 + 25 * 3600 * 1000) // 25h later
+      const result = getCachedInterval(makeConfig(), log)
+      expect(result.source).toBe('cached')
+      expect(result.value).toBe(150)
+      expect(result.warning).toContain('24h')
+      expect(result.warning).toContain('SIGHUP')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
-// 7. cache age 21h → source='cached' + warning includes 'stale'
-it('scenario 7: stale cache (21h old) returns cached with stale warning', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new Error('HTTP 500'))
-  const age21h = BASE_NOW - 21 * 3600 * 1000
-  const cachedAt = new Date(age21h).toISOString()
-  const state = makeState({
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
+describe('SIGHUP refresh integration (A6 — module-level)', () => {
+  it('A6: a second prime call after settle picks up the new server value', async () => {
+    vi.mocked(apiClient.getSyncSettings)
+      .mockResolvedValueOnce({ interval_seconds: 60, updated_at: 'boot' })
+      .mockResolvedValueOnce({ interval_seconds: 600, updated_at: 'after-hup' })
+
+    // Boot prime.
+    await primeIntervalCache(makeConfig(), log)
+    expect(getCachedInterval(makeConfig(), log).value).toBe(60)
+
+    // Operator runs `kill -HUP <pid>` → daemon SIGHUP handler primes again.
+    await primeIntervalCache(makeConfig(), log)
+    expect(getCachedInterval(makeConfig(), log).value).toBe(600)
   })
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('cached')
-  expect(result.warning).toContain('stale')
 })
 
-// 8. cache age 25h (>24h cap) → source='config' (cache 만료 폐기)
-it('scenario 8: expired cache (25h old) falls back to config', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new Error('HTTP 500'))
-  const age25h = BASE_NOW - 25 * 3600 * 1000
-  const cachedAt = new Date(age25h).toISOString()
-  const state = makeState({
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
-  })
-  const result = await resolveInterval(makeConfig(90), state, deps)
-  expect(result.source).toBe('config')
-  expect(result.value).toBe(90)
-})
+describe('resetIntervalCacheForTest', () => {
+  it('clears the cached value and the in-flight promise', async () => {
+    vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({
+      interval_seconds: 99,
+      updated_at: 't',
+    })
+    await primeIntervalCache(makeConfig(), log)
+    expect(getCachedInterval(makeConfig(), log).source).toBe('cached')
 
-// 9. fetch success after circuit open → consecutive_failures=0 reset, skip_until=0 reset
-it('scenario 9: successful fetch after circuit open resets failures and skip_until', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockResolvedValueOnce({ interval_seconds: 180, updated_at: '2026-01-01T00:00:00Z' })
-  const cachedAt = new Date(BASE_NOW - 1000).toISOString()
-  // cycle_index >= skip_until_cycle so circuit is not open
-  const state = makeState({
-    daemon: { started_at: BASE_NOW, last_cycle_at: BASE_NOW, cycle_index: 15 },
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 3, skip_until_cycle: 15 },
+    resetIntervalCacheForTest()
+    expect(getCachedInterval(makeConfig(45), log).source).toBe('config')
   })
-  const result = await resolveInterval(makeConfig(), state, deps)
-  expect(result.source).toBe('server')
-  expect(state.interval_cache?.consecutive_failures).toBe(0)
-  expect(state.interval_cache?.skip_until_cycle).toBe(0)
-})
-
-// 10. config.interval_seconds 미정 + cache 만료 + fetch 실패 → source='default'
-it('scenario 10: expired cache + fetch failure + no config falls back to default', async () => {
-  vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(new Error('HTTP 500'))
-  const age25h = BASE_NOW - 25 * 3600 * 1000
-  const cachedAt = new Date(age25h).toISOString()
-  const state = makeState({
-    interval_cache: { value: 150, fetched_at: cachedAt, source: 'server', consecutive_failures: 0, skip_until_cycle: 0 },
-  })
-  const config = makeConfig(0) // interval_seconds=0 is falsy
-  const result = await resolveInterval(config, state, deps)
-  expect(result.source).toBe('default')
-  expect(result.value).toBe(DEFAULT_INTERVAL_SECONDS)
 })
