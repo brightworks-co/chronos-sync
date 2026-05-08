@@ -24,9 +24,28 @@ export interface MessagesQuery {
   chatId?: string | number
   /** Optional ISO 8601 timestamp; only messages strictly after this are returned. */
   since?: string
+  /**
+   * Maximum number of messages kakaocli should return. Forwarded as
+   * `--limit <n>`. Defaults to 5000 — kakaocli's own default is 50,
+   * which silently truncates large backlogs (e.g. KakaoTalk
+   * cross-device login that floods 300+ deferred messages at once).
+   * The cycle's client-side `since` filter still narrows the actual
+   * upload set, so an oversized limit costs nothing when there is
+   * nothing new to deliver.
+   */
+  limit?: number
   /** Optional kakaocli binary path. Defaults to `kakaocli` on PATH. */
   binary?: string
 }
+
+/**
+ * Default cap for `kakaocli messages --limit`. Picked well above any
+ * realistic single-cycle volume so that a multi-hour deferred backlog
+ * (cross-device KakaoTalk login that flushes >50 messages at once) is
+ * fetched in one call. kakaocli ships with a default of 50, which is
+ * the number that bit a v0.3.0 user during a 10h offline gap.
+ */
+export const DEFAULT_MESSAGES_LIMIT = 5000
 
 /**
  * Invoke `kakaocli messages [--chat <name> | --chat-id <id>] [--since <iso>] --json`
@@ -52,6 +71,7 @@ export async function listMessages(
   if (query.since) {
     args.push('--since', query.since)
   }
+  args.push('--limit', String(query.limit ?? DEFAULT_MESSAGES_LIMIT))
 
   const { stdout, stderr, code } = await runChild(binary, args)
   if (code !== 0) {

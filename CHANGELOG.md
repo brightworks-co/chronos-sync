@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.1 (unreleased)
+
+### Fixed
+
+- **`kakaocli messages` was silently truncated to 50 results.** `listMessages` did not pass `--limit`, so kakaocli's own default of 50 took over. In normal steady-state operation the cap was harmless (a 5-minute cycle rarely sees more than a handful of new messages), but a cross-device KakaoTalk login that flushes a multi-hour backlog at once exposed it: only the most recent 50 messages crossed the daemon's `since` filter, the room cursor advanced past them, and everything older than the 50th-most-recent message was permanently skipped. v0.3.1 forwards `--limit 5000` by default and exposes a per-config override at `messages.limit` in `~/.chronos/config.json` for operators who want a different ceiling. The exhaustive 5000-default sits well above any realistic single-cycle volume; kakaocli still streams whatever subset matches the filter, so an oversized limit costs nothing when there is nothing new to deliver.
+
+## 0.3.0 (2026-05-08)
 
 ### Added
 

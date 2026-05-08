@@ -66,8 +66,25 @@ export interface DaemonConfig {
     since?: SinceOverride;
     /** Optional harvest threshold overrides. When omitted, defaults apply (12h/24h/30min/5pages). */
     harvest?: HarvestThresholds;
+    /** Optional `kakaocli messages` query overrides. */
+    messages?: MessagesOptions;
     /** Rooms the daemon should keep in sync. */
     rooms: RoomConfig[];
+}
+/**
+ * Per-cycle `kakaocli messages` overrides. The daemon reads these and
+ * forwards them to `listMessages` so users can tune the fetch surface
+ * without touching code.
+ */
+export interface MessagesOptions {
+    /**
+     * `kakaocli messages --limit <n>`. Defaults to 5000 (see
+     * `DEFAULT_MESSAGES_LIMIT` in `src/kakaocli.ts`). Lower it only when
+     * you knowingly want kakaocli to truncate; the daemon's own
+     * client-side `since` filter discards anything older than the cursor,
+     * so an oversized limit is harmless when nothing new is pending.
+     */
+    limit?: number;
 }
 export interface HarvestThresholds {
     /**

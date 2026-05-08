@@ -278,6 +278,7 @@ async function syncRoom(
     chat: room.chat_id !== undefined ? undefined : room.chat_name,
     chatId: room.chat_id,
     since,
+    limit: cfg.messages?.limit,
     binary: cfg.kakaocli_path,
   })
 

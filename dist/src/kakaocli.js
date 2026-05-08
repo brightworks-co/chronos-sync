@@ -6,6 +6,14 @@
  */
 import { spawn } from 'node:child_process';
 /**
+ * Default cap for `kakaocli messages --limit`. Picked well above any
+ * realistic single-cycle volume so that a multi-hour deferred backlog
+ * (cross-device KakaoTalk login that flushes >50 messages at once) is
+ * fetched in one call. kakaocli ships with a default of 50, which is
+ * the number that bit a v0.3.0 user during a 10h offline gap.
+ */
+export const DEFAULT_MESSAGES_LIMIT = 5000;
+/**
  * Invoke `kakaocli messages [--chat <name> | --chat-id <id>] [--since <iso>] --json`
  * and parse the JSON array on stdout. kakaocli streams a single JSON array (or
  * a newline-delimited stream when `--follow` is used; we never use `--follow`
@@ -29,6 +37,7 @@ export async function listMessages(query) {
     if (query.since) {
         args.push('--since', query.since);
     }
+    args.push('--limit', String(query.limit ?? DEFAULT_MESSAGES_LIMIT));
     const { stdout, stderr, code } = await runChild(binary, args);
     if (code !== 0) {
         throw new Error(`kakaocli exited with code ${code}: ${stderr.trim() || '(no stderr)'}`);

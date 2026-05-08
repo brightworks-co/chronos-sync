@@ -197,6 +197,7 @@ async function syncRoom(cfg, state, room, log, harvestedThisCycle) {
         chat: room.chat_id !== undefined ? undefined : room.chat_name,
         chatId: room.chat_id,
         since,
+        limit: cfg.messages?.limit,
         binary: cfg.kakaocli_path,
     });
     if (messages.length === 0) {
