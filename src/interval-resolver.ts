@@ -91,10 +91,14 @@ export function getCachedInterval(
     const age = nowMs - Date.parse(cached.fetched_at)
     let warning: string | null = null
     if (age >= MAX_CACHE_AGE_MS) {
-      warning = 'cache stale (≥24h) — send SIGHUP to refresh'
+      warning = 'cache stale (≥24h) — auto-refresh triggered'
       log('warn', 'interval cache exceeded MAX_CACHE_AGE; using last value', {
         age_ms: age,
       })
+      // Self-heal in launchd-style background daemons that have no foreground
+      // SIGHUP path. Fire-and-forget; the in-flight mutex in primeIntervalCache
+      // dedupes concurrent stale reads, and the next call returns fresh value.
+      void primeIntervalCache(cfg, log)
     } else if (age >= STALE_WARN_AGE_MS) {
       warning = 'cache stale (≥20h)'
     }

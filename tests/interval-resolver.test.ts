@@ -165,11 +165,44 @@ describe('getCachedInterval', () => {
       await primeIntervalCache(makeConfig(), log)
 
       vi.setSystemTime(t0 + 25 * 3600 * 1000) // 25h later
+      // Subsequent fetch fails so the auto-refresh trigger does not change
+      // the cached value out from under this assertion.
+      vi.mocked(apiClient.getSyncSettings).mockRejectedValueOnce(
+        new Error('ECONNREFUSED')
+      )
       const result = getCachedInterval(makeConfig(), log)
       expect(result.source).toBe('cached')
       expect(result.value).toBe(150)
       expect(result.warning).toContain('24h')
-      expect(result.warning).toContain('SIGHUP')
+      expect(result.warning).toContain('auto-refresh')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('auto-refreshes the cache once it goes stale (launchd self-heal)', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-05-08T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      vi.mocked(apiClient.getSyncSettings)
+        .mockResolvedValueOnce({ interval_seconds: 150, updated_at: 'boot' })
+        .mockResolvedValueOnce({ interval_seconds: 600, updated_at: 'auto-refresh' })
+      await primeIntervalCache(makeConfig(), log)
+      expect(getCachedInterval(makeConfig(), log).value).toBe(150)
+
+      vi.setSystemTime(t0 + 25 * 3600 * 1000) // 25h later
+      // First stale read kicks the fire-and-forget auto-refresh; the call
+      // itself still returns the stale cached value (no await on the prime).
+      const stale = getCachedInterval(makeConfig(), log)
+      expect(stale.value).toBe(150)
+      expect(stale.source).toBe('cached')
+
+      // Drain the auto-refresh microtask + then the fresh value is in the cache.
+      await vi.waitFor(() => {
+        expect(apiClient.getSyncSettings).toHaveBeenCalledTimes(2)
+      })
+      expect(getCachedInterval(makeConfig(), log).value).toBe(600)
     } finally {
       vi.useRealTimers()
     }
