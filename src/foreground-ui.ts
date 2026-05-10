@@ -11,6 +11,7 @@ import { configPath } from './state-file.js'
 import { VERSION } from './constants.js'
 import type { DaemonConfig, RoomConfig } from './types.js'
 import type { ResolvedInterval } from './interval-resolver.js'
+import { bootstrapStatusLabel } from './bootstrap-resolver.js'
 
 export const ANSI = {
   reset: '\x1b[0m',
@@ -26,6 +27,18 @@ export interface PrintHeaderInputs {
   configPath: string
   version: string
   resolved?: ResolvedInterval
+  /**
+   * Auth-mode storage backend (`keychain` or `file`). Surfaced in the header
+   * so the user can confirm at a glance which storage path is in effect.
+   * Undefined in legacy-mode.
+   */
+  patStorage?: 'keychain' | 'file'
+  /**
+   * Pre-resolved bootstrap status label (e.g. `ok (3s ago)`, `stale (21h ago)`,
+   * `refused (>24h)`, `missing`). When omitted, the renderer queries the
+   * resolver directly. Tests can inject a fixed label for determinism.
+   */
+  bootstrapLabel?: string
 }
 
 /** Build the startup banner shown when foreground mode boots. */
@@ -47,6 +60,19 @@ export function formatHeader(inputs: PrintHeaderInputs): string {
       : `${intervalSeconds}초`
   const sourceTag = source ? ` (${source})` : ''
   lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`)
+
+  if (inputs.config.mode === 'auth') {
+    const bootstrap = inputs.bootstrapLabel ?? bootstrapStatusLabel()
+    const pat = inputs.patStorage ?? 'keychain'
+    lines.push(
+      `${ANSI.dim}모드:${ANSI.reset}   auth — bootstrap: ${bootstrap}, pat: ${pat}`
+    )
+  } else if (inputs.config.mode === 'legacy') {
+    lines.push(
+      `${ANSI.dim}모드:${ANSI.reset}   legacy (config.json) — v0.6.0 cutover. ` +
+        `Run "chronos-sync migrate" to switch.`
+    )
+  }
 
   if (inputs.resolved?.warning) {
     lines.push(`${ANSI.yellow}! ${inputs.resolved.warning}${ANSI.reset}`)

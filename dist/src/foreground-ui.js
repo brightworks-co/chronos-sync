@@ -8,6 +8,7 @@
  */
 import { configPath } from './state-file.js';
 import { VERSION } from './constants.js';
+import { bootstrapStatusLabel } from './bootstrap-resolver.js';
 export const ANSI = {
     reset: '\x1b[0m',
     green: '\x1b[32m',
@@ -31,6 +32,15 @@ export function formatHeader(inputs) {
         : `${intervalSeconds}초`;
     const sourceTag = source ? ` (${source})` : '';
     lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`);
+    if (inputs.config.mode === 'auth') {
+        const bootstrap = inputs.bootstrapLabel ?? bootstrapStatusLabel();
+        const pat = inputs.patStorage ?? 'keychain';
+        lines.push(`${ANSI.dim}모드:${ANSI.reset}   auth — bootstrap: ${bootstrap}, pat: ${pat}`);
+    }
+    else if (inputs.config.mode === 'legacy') {
+        lines.push(`${ANSI.dim}모드:${ANSI.reset}   legacy (config.json) — v0.6.0 cutover. ` +
+            `Run "chronos-sync migrate" to switch.`);
+    }
     if (inputs.resolved?.warning) {
         lines.push(`${ANSI.yellow}! ${inputs.resolved.warning}${ANSI.reset}`);
     }
