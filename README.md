@@ -104,6 +104,18 @@ mkdir -p ~/.chronos
 
 ## 명령어
 
+### auth — PAT 등록 (v0.5.0+)
+
+```bash
+chronos-sync auth                        # 대화형 (입력 숨김)
+pbpaste | chronos-sync auth --from-stdin # 클립보드에서 PAT 읽기
+chronos-sync auth --reset                # 기존 PAT 룸 등록 해제 후 재등록
+```
+
+PAT은 macOS Keychain에 저장됩니다 (service: `chronos-sync`, account: `<user_email>`). Keychain 사용 불가 시 `--allow-file-pat`으로 `~/.chronos/auth.token` (mode 0600) 파일 저장에 명시적으로 동의해야 합니다. 자세한 사용법은 `chronos-sync auth --help` 참조.
+
+---
+
 ### 기본 실행 (포그라운드 모드)
 
 ```bash
