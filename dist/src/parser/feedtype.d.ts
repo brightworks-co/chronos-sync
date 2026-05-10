@@ -5,7 +5,7 @@
  * payloads in the `text` field, e.g.
  *
  *   {"feedType":25,"logId":3835554415426912257,"hidden":true,"targetRevision":1}
- *   {"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"드림솔져"}]}
+ *   {"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"user-7"}]}
  *
  * KakaoTalk macOS interprets these as system events (deletions, member
  * changes, voice/video call markers, etc.) and renders a localized

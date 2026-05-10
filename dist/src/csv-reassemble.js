@@ -1,9 +1,18 @@
 /**
  * kakaocli `messages --json` output → Mac KakaoTalk CSV export format.
  *
- * The Chronos server already accepts the Mac CSV format (`Date,User,Message`)
- * at `/api/upload/init/chunk/finalize`. Reassembling kakaocli's JSON into the
+ * The Chronos server accepts the Mac CSV format at
+ * `/api/upload/init/chunk/finalize`. Reassembling kakaocli's JSON into the
  * same shape avoids a second ingest path on the server.
+ *
+ * Output schema (csv-format-v5, 4-col): `Date,User,Message,LogId`. The Chronos
+ * v5 receiver auto-detects the header and falls back to legacy 3-col
+ * (`Date,User,Message`) so older daemons keep working. The 4-col `LogId`
+ * column carries kakaocli's monotone-increasing row id (`m.id`, BigInt-safe
+ * stringified) and powers the v5 sort tuple (`compareForSequencing` 5-tier:
+ * timestamp / log_id / text / sender / message_id) — fixing the v4 fundamental
+ * tiebreak defect where same-minute messages were ordered by text-ASC instead
+ * of natural utterance order.
  *
  * kakaocli v0.6.0 row schema (from `kakaocli messages --chat <name> --json`
  * or `kakaocli messages --chat-id <id> --json`):
@@ -57,14 +66,18 @@ function csvQuote(s, alwaysQuote = false) {
  * must pass `kakao_original_name` separately to `/api/upload/init`).
  */
 export function reassembleMacCsv(messages) {
-    const lines = ['Date,User,Message'];
+    const lines = ['Date,User,Message,LogId'];
     for (const m of messages) {
         const date = toKstDateString(m.timestamp);
         // Mac CSV export quotes the User and Message columns so that
         // commas / newlines inside names or content do not break parsing.
         const user = csvQuote(m.sender ?? '', true);
         const message = csvQuote(transformFeedTypeText(m.text ?? ''), true);
-        lines.push(`${date},${user},${message}`);
+        // logId is kakaocli's monotone row id. Stringified to dodge JS number
+        // precision loss (real ids are 19-digit BigInts > 2^53). Always quoted
+        // so receivers do not numeric-cast the column.
+        const logId = csvQuote(String(m.id ?? ''), true);
+        lines.push(`${date},${user},${message},${logId}`);
     }
     // Trailing newline — Mac export ends with a final \n.
     return lines.join('\n') + '\n';

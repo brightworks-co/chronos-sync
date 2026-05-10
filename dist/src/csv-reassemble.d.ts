@@ -1,9 +1,18 @@
 /**
  * kakaocli `messages --json` output → Mac KakaoTalk CSV export format.
  *
- * The Chronos server already accepts the Mac CSV format (`Date,User,Message`)
- * at `/api/upload/init/chunk/finalize`. Reassembling kakaocli's JSON into the
+ * The Chronos server accepts the Mac CSV format at
+ * `/api/upload/init/chunk/finalize`. Reassembling kakaocli's JSON into the
  * same shape avoids a second ingest path on the server.
+ *
+ * Output schema (csv-format-v5, 4-col): `Date,User,Message,LogId`. The Chronos
+ * v5 receiver auto-detects the header and falls back to legacy 3-col
+ * (`Date,User,Message`) so older daemons keep working. The 4-col `LogId`
+ * column carries kakaocli's monotone-increasing row id (`m.id`, BigInt-safe
+ * stringified) and powers the v5 sort tuple (`compareForSequencing` 5-tier:
+ * timestamp / log_id / text / sender / message_id) — fixing the v4 fundamental
+ * tiebreak defect where same-minute messages were ordered by text-ASC instead
+ * of natural utterance order.
  *
  * kakaocli v0.6.0 row schema (from `kakaocli messages --chat <name> --json`
  * or `kakaocli messages --chat-id <id> --json`):
