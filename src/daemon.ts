@@ -490,11 +490,23 @@ export async function enrichSenders(
   return messages.map((m) => {
     if (m.sender !== null && m.sender !== undefined && m.sender.length > 0) return m
     if (m.is_from_me) return { ...m, sender: m.sender ?? '나' }
+    // KakaoTalk system / hidden / placeholder rows carry sender_id <= 0
+    // (e.g. type 1999 "관리자가 메시지를 가렸습니다", join/leave notices).
+    // They have no real author, so resolveSenderNames can never resolve
+    // them — mark them explicitly as "시스템" so the hold-back filter
+    // doesn't block the cycle indefinitely (see PR #26 fix).
+    if (typeof m.sender_id === 'number' && (!Number.isFinite(m.sender_id) || m.sender_id <= 0)) {
+      return { ...m, sender: '시스템' }
+    }
+    if (typeof m.sender_id === 'string' && !/^[1-9][0-9]*$/.test(m.sender_id)) {
+      return { ...m, sender: '시스템' }
+    }
     const key = String(m.sender_id)
     const resolved = nameMap.get(key)
     if (resolved !== undefined) return { ...m, sender: resolved }
-    // Resolution failed. Leave `sender` as null so the caller can hold
-    // back the entire cycle — we never send `참여자_<id>` to the server.
+    // Resolution failed for a real sender_id. Leave `sender` as null so
+    // the caller can hold back the cycle — we never send `참여자_<id>`
+    // to the server.
     return { ...m, sender: null }
   })
 }
