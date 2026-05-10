@@ -64,3 +64,55 @@ describe('parseMacCsv — date formats and empty-text handling', () => {
     expect(result.messages[1].sequence_in_minute).toBe(1)
   })
 })
+
+describe('parseMacCsv — v5 logId capture (4-col / 6-col header)', () => {
+  it('captures logId from 4-col header (Date,User,Message,LogId) + zero-pads to 20 chars', () => {
+    const raw = [
+      'Date,User,Message,LogId',
+      // 19-digit (real kakaocli shape) + 18-digit (mixed length sanity)
+      '2026-05-10 12:00:00,user-a,msg-1,"3000000000000000010"',
+      '2026-05-10 12:00:00,user-b,msg-2,"300000000000000002"',
+    ].join('\n')
+
+    const result = parseMacCsv(raw)
+    expect(result.header_variant).toBe('mac-csv')
+    expect(result.messages).toHaveLength(2)
+    // Zero-padded to 20 chars so lex ASC = numeric ASC.
+    expect(result.messages[0].log_id).toBe('03000000000000000010')
+    expect(result.messages[1].log_id).toBe('00300000000000000002')
+    // 18-digit zero-padded < 19-digit zero-padded → sort tuple stable.
+    expect(
+      (result.messages[1].log_id ?? '').localeCompare(result.messages[0].log_id ?? '') < 0,
+    ).toBe(true)
+  })
+
+  it('captures logId from 6-col header (Date,User,Message,Seconds,LogId,ChatType)', () => {
+    const raw = [
+      'Date,User,Message,Seconds,LogId,ChatType',
+      '2026-05-10 12:00:00,user-a,msg-1,42,"3000000000000000099",text',
+    ].join('\n')
+
+    const result = parseMacCsv(raw)
+    expect(result.messages[0].log_id).toBe('03000000000000000099')
+  })
+
+  it('falls back to 3-col legacy header (log_id undefined)', () => {
+    const raw = [
+      'Date,User,Message',
+      '2026-05-10 12:00:00,user-a,msg-1',
+    ].join('\n')
+
+    const result = parseMacCsv(raw)
+    expect(result.messages[0].log_id).toBeUndefined()
+  })
+
+  it('leaves log_id undefined when 4-col row has empty LogId column', () => {
+    const raw = [
+      'Date,User,Message,LogId',
+      '2026-05-10 12:00:00,user-a,msg-1,""',
+    ].join('\n')
+
+    const result = parseMacCsv(raw)
+    expect(result.messages[0].log_id).toBeUndefined()
+  })
+})

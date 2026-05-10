@@ -2,6 +2,13 @@ import type { ParsedMessage, ParseResult, ParseOptions } from './types.js'
 import { toTimestampKst } from './kakao.js'
 import { normalizeSender, normalizeContent, classifyMessage } from './normalize.js'
 
+/**
+ * Length to which raw kakaocli logId values are zero-padded so lexicographic
+ * ASC = numeric ASC = utterance-time ASC. Real ids are 19 digits (observed
+ * via T6 spike) — pad to 20 for a one-digit safety margin.
+ */
+const LOGID_PAD_LENGTH = 20
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }
@@ -121,6 +128,21 @@ export function parseMacCsv(raw: string, opts: ParseOptions = {}): ParseResult {
     }
   }
 
+  // v5: detect csv-format-v5 variants by inspecting 4th+ header columns.
+  //   - 3-col legacy:  Date,User,Message                                   (log_id undefined)
+  //   - 4-col:         Date,User,Message,LogId                             (row[3] → log_id)
+  //   - 6-col:         Date,User,Message,Seconds,LogId,ChatType            (row[4] → log_id)
+  // Falls back to 3-col when none of the optional headers match — preserves
+  // backward compat for any third-party producer.
+  const col3 = headerRow[3]?.trim().toLowerCase() ?? ''
+  const col4 = headerRow[4]?.trim().toLowerCase() ?? ''
+  let logIdColumn: number | null = null
+  if (col3 === 'logid') {
+    logIdColumn = 3
+  } else if (col4 === 'logid') {
+    logIdColumn = 4
+  }
+
   const messages: ParsedMessage[] = []
   let lastMinuteKey: string | null = null
   let sequenceInMinute = 0
@@ -185,6 +207,15 @@ export function parseMacCsv(raw: string, opts: ParseOptions = {}): ParseResult {
 
     const kind = classifyMessage(content, senderRaw)
 
+    // v5: capture logId when csv-format-v5 header was detected.
+    let logId: string | undefined
+    if (logIdColumn !== null) {
+      const raw = row[logIdColumn]?.trim() ?? ''
+      if (raw.length > 0) {
+        logId = raw.padStart(LOGID_PAD_LENGTH, '0')
+      }
+    }
+
     messages.push({
       date,
       time,
@@ -195,6 +226,7 @@ export function parseMacCsv(raw: string, opts: ParseOptions = {}): ParseResult {
       sender_normalized: senderNormalized,
       text: content,
       kind,
+      ...(logId !== undefined ? { log_id: logId } : {}),
     })
   }
 
