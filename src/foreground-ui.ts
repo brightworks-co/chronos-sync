@@ -9,8 +9,7 @@
 
 import { configPath } from './state-file.js'
 import { VERSION } from './constants.js'
-import type { DaemonConfig, RoomConfig } from './types.js'
-import type { ResolvedInterval } from './interval-resolver.js'
+import type { DaemonConfig, RoomConfig, ResolvedInterval } from './types.js'
 import { bootstrapStatusLabel, peekCachedSnapshot } from './bootstrap-resolver.js'
 
 export const ANSI = {
@@ -28,9 +27,8 @@ export interface PrintHeaderInputs {
   version: string
   resolved?: ResolvedInterval
   /**
-   * Auth-mode storage backend (`keychain` or `file`). Surfaced in the header
-   * so the user can confirm at a glance which storage path is in effect.
-   * Undefined in legacy-mode.
+   * PAT storage backend (`keychain` or `file`). Surfaced in the header so the
+   * user can confirm at a glance which storage path is in effect.
    */
   patStorage?: 'keychain' | 'file'
   /**
@@ -40,12 +38,11 @@ export interface PrintHeaderInputs {
    */
   bootstrapLabel?: string
   /**
-   * Tri-state override for the interval-prime probe. When omitted the renderer
-   * derives this from `peekCachedSnapshot() != null`. Tests inject a literal
-   * boolean for determinism. Auth-mode + `false` → render the
-   * `서버에서 받아오는 중…` placeholder instead of the default interval.
+   * Override for the cached bootstrap snapshot. When omitted the renderer
+   * calls `peekCachedSnapshot()` directly. Tests inject a literal value to
+   * pin the precedence behavior without spinning up the resolver state.
    */
-  bootstrapPrimed?: boolean
+  cachedSnapshot?: { interval_seconds: number } | null
 }
 
 /** Build the startup banner shown when foreground mode boots. */
@@ -58,21 +55,29 @@ export function formatHeader(inputs: PrintHeaderInputs): string {
     `${ANSI.dim}룸:${ANSI.reset}     ${inputs.config.rooms.length}개 매핑 — ${formatRoomList(inputs.config.rooms)}`
   )
 
-  // Auth-mode + first cycle hasn't primed yet → don't show the misleading
-  // default fallback (e.g. "5분" while the actual server value is 30초).
-  // Render a placeholder instead; the next printHeader() (after primeBootstrap
-  // 200/304 lands) will swap in the real value.
-  const primed =
-    inputs.bootstrapPrimed !== undefined ? inputs.bootstrapPrimed : peekCachedSnapshot() !== null
-  const showPrimePlaceholder =
-    inputs.config.mode === 'auth' && inputs.resolved === undefined && !primed
+  // Interval display precedence (v0.6.0 root-cause fix):
+  //   1. `resolved.value`   — freshest signal (post-cycle).
+  //   2. cached snapshot    — bootstrap-resolver's persisted interval.
+  //   3. `cfg.interval_seconds` — fallback only when neither is available
+  //      (e.g. very first run before the bootstrap cache exists).
+  //
+  // Pre-v0.6.0 we used cfg.interval_seconds as the second tier, which made
+  // the second-and-onward foreground starts briefly show the cfg default
+  // (e.g. "5분") before swapping in the cached value (e.g. "30초") after
+  // the first cycle. The cache-precedence step closes that gap.
+  const cachedSnapshot =
+    inputs.cachedSnapshot !== undefined ? inputs.cachedSnapshot : peekCachedSnapshot()
+  const showPlaceholder = inputs.resolved === undefined && cachedSnapshot === null
 
-  if (showPrimePlaceholder) {
+  if (showPlaceholder) {
     lines.push(
       `${ANSI.dim}주기:${ANSI.reset}   서버에서 받아오는 중… — 끄려면 Ctrl+C 또는 터미널 닫기`
     )
   } else {
-    const intervalSeconds = inputs.resolved?.value ?? inputs.config.interval_seconds
+    const intervalSeconds =
+      inputs.resolved?.value
+      ?? cachedSnapshot?.interval_seconds
+      ?? inputs.config.interval_seconds
     const source = inputs.resolved?.source
     const minutes = intervalSeconds / 60
     const pretty =
@@ -83,18 +88,12 @@ export function formatHeader(inputs: PrintHeaderInputs): string {
     lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`)
   }
 
-  if (inputs.config.mode === 'auth') {
-    const bootstrap = inputs.bootstrapLabel ?? bootstrapStatusLabel()
-    const pat = inputs.patStorage ?? 'keychain'
-    lines.push(
-      `${ANSI.dim}모드:${ANSI.reset}   auth — bootstrap: ${bootstrap}, pat: ${pat}`
-    )
-  } else if (inputs.config.mode === 'legacy') {
-    lines.push(
-      `${ANSI.dim}모드:${ANSI.reset}   legacy (config.json) — v0.6.0 cutover. ` +
-        `Run "chronos-sync migrate" to switch.`
-    )
-  }
+  // Auth context line (bootstrap freshness + PAT storage).
+  const bootstrapLabel = inputs.bootstrapLabel ?? bootstrapStatusLabel()
+  const pat = inputs.patStorage ?? 'keychain'
+  lines.push(
+    `${ANSI.dim}인증:${ANSI.reset}   bootstrap: ${bootstrapLabel}, pat: ${pat}`
+  )
 
   if (inputs.resolved?.warning) {
     lines.push(`${ANSI.yellow}! ${inputs.resolved.warning}${ANSI.reset}`)

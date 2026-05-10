@@ -53,10 +53,7 @@ import {
   type AuthFile,
 } from '../../src/auth-file'
 import { getPat as keychainGetPat } from '../../src/keychain'
-import {
-  loadConfig,
-  resetLegacyDeprecationBannerForTest,
-} from '../../src/state-file'
+import { loadConfig } from '../../src/state-file'
 
 const PAT = 'chr_pat_' + 'a'.repeat(32)
 const AUTH: AuthFile = {
@@ -82,7 +79,6 @@ beforeEach(async () => {
   // and no cache).
   await saveAuth(AUTH)
   resetBootstrapCacheForTest()
-  resetLegacyDeprecationBannerForTest()
   vi.mocked(fetchBootstrapHttp).mockReset()
   vi.mocked(keychainGetPat).mockResolvedValue(PAT)
   log.mockClear()
@@ -99,7 +95,7 @@ describe('NTH-4: auth.json present + no cache + server unreachable', () => {
   it('loadConfig returns auth-mode with empty rooms (signal to daemon to prime)', async () => {
     expect(existsSync(bootstrapCachePath())).toBe(false)
     const cfg = await loadConfig()
-    expect(cfg.mode).toBe('auth')
+    // v0.6.0+: auth-mode is the only mode; no `.mode` discriminator on DaemonConfig.
     expect(cfg.rooms).toEqual([])
     expect(cfg.pat).toBe(PAT)
     expect(cfg.server_url).toBe(AUTH.server_url)

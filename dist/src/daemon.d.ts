@@ -20,8 +20,7 @@
  */
 import { type KakaoCliMessage } from './csv-reassemble.js';
 import { UploadError } from './uploader.js';
-import { type ResolvedInterval } from './interval-resolver.js';
-import type { DaemonConfig, DaemonState, RoomConfig } from './types.js';
+import type { DaemonConfig, DaemonState, RoomConfig, ResolvedInterval } from './types.js';
 import { type HarvestReason } from './harvest-detector.js';
 interface CycleOutcome {
     /** Number of rooms with new messages uploaded this cycle. */

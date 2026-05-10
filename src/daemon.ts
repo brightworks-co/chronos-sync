@@ -35,17 +35,17 @@ import {
   releaseLock,
 } from './state-file.js'
 import {
-  primeIntervalCache,
-  getCachedInterval,
-  type ResolvedInterval,
-} from './interval-resolver.js'
-import {
-  bootstrapStatusLabel,
   getBootstrap as getCachedBootstrap,
   primeBootstrap,
 } from './bootstrap-resolver.js'
 import { loadAuth } from './auth-file.js'
-import type { DaemonConfig, DaemonState, RoomConfig, DaemonRuntime } from './types.js'
+import type {
+  DaemonConfig,
+  DaemonState,
+  RoomConfig,
+  DaemonRuntime,
+  ResolvedInterval,
+} from './types.js'
 import {
   DEFAULT_HARVEST_TOP,
   DEFAULT_HARVEST_MAX_CLICKS,
@@ -151,41 +151,45 @@ export async function runCycle(
 ): Promise<{ outcome: CycleOutcome; resolved: ResolvedInterval }> {
   state.daemon.cycle_index += 1
 
-  // Auth-mode: bootstrap-resolver is the sole truth for interval + rooms (N5).
-  // If the resolver classifies the cache as `refuse: true` (24h ceiling or
-  // 401-invalidated), short-circuit the cycle so runLoop can exit per CRIT-3.
-  let effectiveCfg = cfg
-  let resolved: ResolvedInterval
-  if (cfg.mode === 'auth') {
-    const bootstrap = getCachedBootstrap(log)
-    if (bootstrap.refuse) {
-      log('error', 'bootstrap refused upload', {
-        status: bootstrap.status,
-        warning: bootstrap.warning,
-      })
-      return {
-        outcome: { uploaded_rooms: 0, failed_rooms: 0, refused: bootstrap.status === 'refused-stale' || bootstrap.status === 'refused-auth' || bootstrap.status === 'missing' ? bootstrap.status : 'missing' },
-        resolved: {
-          value: cfg.interval_seconds,
-          source: 'config',
-          fetched_at: new Date().toISOString(),
-          warning: bootstrap.warning,
-        },
-      }
-    }
-    effectiveCfg = {
-      ...cfg,
-      interval_seconds: bootstrap.snapshot?.interval_seconds ?? cfg.interval_seconds,
-      rooms: bootstrap.snapshot?.rooms ?? cfg.rooms,
-    }
-    resolved = {
-      value: effectiveCfg.interval_seconds,
-      source: 'cached',
-      fetched_at: bootstrap.snapshot?.fetched_at ?? new Date().toISOString(),
+  // bootstrap-resolver is the sole truth for interval + rooms. If the
+  // resolver classifies the cache as `refuse: true` (24h ceiling or
+  // 401-invalidated or missing), short-circuit the cycle so runLoop can
+  // exit per CRIT-3.
+  const bootstrap = getCachedBootstrap(log)
+  if (bootstrap.refuse) {
+    log('error', 'bootstrap refused upload', {
+      status: bootstrap.status,
       warning: bootstrap.warning,
+    })
+    return {
+      outcome: {
+        uploaded_rooms: 0,
+        failed_rooms: 0,
+        refused:
+          bootstrap.status === 'refused-stale' ||
+          bootstrap.status === 'refused-auth' ||
+          bootstrap.status === 'missing'
+            ? bootstrap.status
+            : 'missing',
+      },
+      resolved: {
+        value: cfg.interval_seconds,
+        source: 'config',
+        fetched_at: new Date().toISOString(),
+        warning: bootstrap.warning,
+      },
     }
-  } else {
-    resolved = getCachedInterval(cfg, log)
+  }
+  const effectiveCfg: DaemonConfig = {
+    ...cfg,
+    interval_seconds: bootstrap.snapshot?.interval_seconds ?? cfg.interval_seconds,
+    rooms: bootstrap.snapshot?.rooms ?? cfg.rooms,
+  }
+  const resolved: ResolvedInterval = {
+    value: effectiveCfg.interval_seconds,
+    source: 'cached',
+    fetched_at: bootstrap.snapshot?.fetched_at ?? new Date().toISOString(),
+    warning: bootstrap.warning,
   }
 
   // Daemon-scope harvest decision (pre-loop, cycle-scoped, ≤1 spawn per cycle).
@@ -575,38 +579,29 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
   const state = await loadState()
   state.daemon.started_at = Date.now()
 
-  // Mode-aware prime. Auth-mode (PR6 of auto-upload-server-driven-config plan):
-  // bootstrap-resolver is the sole source of truth for both `interval_seconds`
-  // and `rooms`. Skip primeIntervalCache (legacy-only) so the two caches don't
-  // race for interval ownership (N5).
-  if (cfg.mode === 'auth') {
-    const auth = await loadAuth()
-    if (!auth) {
-      log('error', 'auth-mode but auth.json missing after loadConfig — re-run "chronos-sync auth"')
-      releaseLock()
-      process.exit(1)
-    }
-    await primeBootstrap(auth, cfg.pat, log)
-    // Cache may have been freshly primed; re-load so cfg.rooms reflects it.
-    try {
-      cfg = await loadConfig()
-    } catch (err) {
-      log('error', 'config reload after first prime failed', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-    // NTH-4 cross-PR test: auth.json present + bootstrap unreachable + no
-    // prior cache → exit loud with actionable error rather than spinning a
-    // useless cycle loop.
-    if (cfg.rooms.length === 0) {
-      log('error', 'bootstrap snapshot unavailable: server unreachable AND no cached snapshot. Re-run when network is available.')
-      releaseLock()
-      process.exit(1)
-    }
-  } else {
-    // Legacy-mode: existing v0.3.0 (Option B) behavior — interval cache
-    // primed at boot + on SIGHUP, never per-cycle.
-    await primeIntervalCache(cfg, log)
+  // bootstrap-resolver is the sole source of truth for `interval_seconds`
+  // and `rooms`. Prime once at boot + on SIGHUP, never per-cycle.
+  const auth = await loadAuth()
+  if (!auth) {
+    log('error', 'auth.json missing after loadConfig — re-run "chronos-sync auth"')
+    releaseLock()
+    process.exit(1)
+  }
+  await primeBootstrap(auth, cfg.pat, log)
+  // Cache may have been freshly primed; re-load so cfg.rooms reflects it.
+  try {
+    cfg = await loadConfig()
+  } catch (err) {
+    log('error', 'config reload after first prime failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  // auth.json present + bootstrap unreachable + no prior cache → exit loud
+  // with an actionable error rather than spinning a useless cycle loop.
+  if (cfg.rooms.length === 0) {
+    log('error', 'bootstrap snapshot unavailable: server unreachable AND no cached snapshot. Re-run when network is available.')
+    releaseLock()
+    process.exit(1)
   }
 
   // Probe harvest capabilities once at boot — only when harvest is enabled.
@@ -665,22 +660,16 @@ export async function runLoop(options: RunOptions = {}): Promise<void> {
         log('info', 'config reloaded via SIGHUP', {
           interval_seconds: cfg.interval_seconds,
           rooms: cfg.rooms.length,
-          mode: cfg.mode ?? 'legacy',
         })
       } catch (err) {
         log('error', 'config reload failed', {
           error: err instanceof Error ? err.message : String(err),
         })
       }
-      // Refresh the active cache from the server. In-flight mutex inside the
-      // chosen prime path deduplicates rapid SIGHUP bursts. Errors swallowed
-      // inside prime — never propagate.
-      if (cfg.mode === 'auth') {
-        const auth = await loadAuth().catch(() => null)
-        if (auth) void primeBootstrap(auth, cfg.pat, log)
-      } else {
-        void primeIntervalCache(cfg, log)
-      }
+      // Refresh bootstrap from the server. In-flight mutex inside primeBootstrap
+      // deduplicates rapid SIGHUP bursts. Errors swallowed inside prime.
+      const refreshAuth = await loadAuth().catch(() => null)
+      if (refreshAuth) void primeBootstrap(refreshAuth, cfg.pat, log)
     })()
   })
 

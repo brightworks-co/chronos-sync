@@ -10,11 +10,7 @@
  * Subcommands:
  *   (none) | run | start  Foreground mode (default — the user-facing entry).
  *   auth [<PAT>]          Register a PAT (Keychain happy path; `--allow-file-pat`
- *                         opt-in falls back to mode 0600 file). v0.5.0+.
- *   migrate               One-shot v0.4.x config.json → auth-mode conversion.
- *                         `--dry-run` prints intended changes without touching
- *                         server/Keychain/FS. `--force` skips daemon detect +
- *                         confirm prompt. v0.5.0+.
+ *                         opt-in falls back to mode 0600 file). Required.
  *   daemon                Background loop for launchd. Deprecated for human use;
  *                         retained so existing launchd plists keep working.
  *   daemon --status       Raw JSON daemon snapshot (internal).
@@ -120,29 +116,6 @@ switch (cmd) {
             process.exit(1);
         });
         break;
-    case 'migrate':
-        Promise.all([
-            import('../src/cli/migrate.js'),
-            import('../src/cli/migrate-args.js'),
-        ])
-            .then(async ([migrateModule, argsModule]) => {
-            const parsed = argsModule.parseMigrateArgs(args);
-            if (parsed.kind === 'help') {
-                printMigrateUsage();
-                process.exit(0);
-            }
-            if (parsed.kind === 'invalid') {
-                process.stderr.write(`error: ${parsed.message}\n`);
-                process.exit(1);
-            }
-            const result = await migrateModule.runMigrate(parsed.options);
-            process.exit(result.exitCode);
-        })
-            .catch((err) => {
-            process.stderr.write('chronos-sync: migrate error: ' + String(err) + '\n');
-            process.exit(1);
-        });
-        break;
     case 'health':
         import('../src/state-file.js').then(async (stateModule) => {
             const { checkHealth } = await import('../src/health.js');
@@ -182,9 +155,6 @@ function printUsage() {
   auth [<PAT>]              PAT 등록 (Keychain 우선, --allow-file-pat 시 0600 파일).
                             옵션: --from-stdin, --token <PAT>, --server-url <url>,
                                   --allow-file-pat, --reset, --help
-  migrate                   v0.4.x config.json → auth-mode 일회성 변환.
-                            옵션: --dry-run, --force, --server-url <url>,
-                                  --allow-file-pat, --help
   status                    설정 + 룸별 마지막 동기화 시각
   health                    헬스 체크 결과 (JSON)
   interval <초>             동기화 주기 변경 (10~3600). 데몬 다음 cycle 자동 반영.
@@ -196,37 +166,6 @@ function printUsage() {
   daemon                    백그라운드 루프 (launchd 전용, 일반 사용자 비권장)
   version                   버전 표시
   help                      도움말 표시
-`);
-}
-function printMigrateUsage() {
-    process.stdout.write(`chronos-sync migrate — v0.4.x config.json → auth-mode 변환
-
-사용:
-  chronos-sync migrate --dry-run          예정 변경 출력 (server/Keychain/FS 무변경)
-  chronos-sync migrate                    인터랙티브 (Y/n 확인)
-  chronos-sync migrate --force            확인 프롬프트 + 데몬 실행 검사 모두 스킵
-
-옵션:
-  --dry-run                 변경 사항 요약만 출력하고 종료 (안전)
-  --force                   running daemon detect 무시 + 확인 프롬프트 스킵
-  --server-url <url>        legacy config.json의 server_url 대신 사용
-  --allow-file-pat          Keychain 사용 불가 시 ~/.chronos/auth.token (0600)에 저장
-  --help                    이 도움말
-
-흐름:
-  1. running daemon 검출 (pgrep + launchctl) — --force 없이는 거부.
-  2. ~/.chronos/config.json 읽기 (없거나 pat/rooms 없으면 종료 0).
-  3. 서버 pre-flight (eligible projects)로 invalid row 필터링.
-  4. --dry-run 시 요약만, exit 0.
-  5. (else) Y/n 확인 프롬프트.
-  6. PUT /api/account/auto-upload/rooms (legacy PAT).
-  7. PUT /api/account/settings/sync (legacy interval).
-  8. GET /api/auto-upload/bootstrap → user_email.
-  9. PAT를 Keychain (또는 0600 file with --allow-file-pat)에 저장.
- 10. ~/.chronos/auth.json 작성.
- 11. config.json → config.json.legacy.bak.<ts> rename.
-
-step 6-10 중 실패 시 step 11(rename)은 절대 실행되지 않음 — legacy config은 그대로.
 `);
 }
 function printAuthUsage() {
