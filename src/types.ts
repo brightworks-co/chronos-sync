@@ -53,7 +53,21 @@ export interface SinceOverride {
   override_seconds?: number
 }
 
+/**
+ * Daemon load mode. v0.5.0 introduces `auth` mode (auth.json + cached
+ * bootstrap snapshot). `legacy` is the v0.4.x `~/.chronos/config.json` shape
+ * with embedded `pat` and `rooms` — supported through one minor release with
+ * a deprecation banner, hard-refused in v0.6.0.
+ */
+export type ConfigMode = 'auth' | 'legacy'
+
 export interface DaemonConfig {
+  /**
+   * Which storage path produced this config. Set by `loadConfig`. Optional
+   * because tests + ad-hoc constructors may omit it; runtime branches on
+   * `mode === 'auth'` only when present.
+   */
+  mode?: ConfigMode
   /** Base URL of the Chronos server, e.g. `https://chronos.brightworks.app`. */
   server_url: string
   /** Personal Access Token (`chr_pat_<32hex>`). */

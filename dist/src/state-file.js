@@ -8,17 +8,63 @@
  */
 import { promises as fs } from 'node:fs';
 import { existsSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DAEMON_DIR_NAME, CONFIG_FILE_NAME, STATE_FILE_NAME, LOCK_FILE_NAME, } from './constants.js';
+import { CONFIG_FILE_NAME, STATE_FILE_NAME, LOCK_FILE_NAME, } from './constants.js';
 import { DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS, } from './types.js';
+import { authPath, chronosHomeDir, loadAuth, loadPatFile, } from './auth-file.js';
+import { getPat as keychainGetPat } from './keychain.js';
+import { loadCachedSnapshotFromDisk } from './bootstrap-resolver.js';
 let maxPagesWarnEmitted = false;
+let legacyDeprecationBannerEmitted = false;
 /** Reset the max_pages deprecation warn guard. For use in tests only. */
 export function resetMaxPagesWarnForTest() {
     maxPagesWarnEmitted = false;
 }
+/** Reset the v0.6.0 legacy deprecation banner guard. For use in tests only. */
+export function resetLegacyDeprecationBannerForTest() {
+    legacyDeprecationBannerEmitted = false;
+}
+/**
+ * Thrown when neither `~/.chronos/auth.json` nor `~/.chronos/config.json`
+ * exists. Surfaces an actionable recovery message linking to the install
+ * page so launchd's KeepAlive doesn't loop without context.
+ */
+export class ConfigMissingError extends Error {
+    constructor() {
+        super(`No chronos-sync config found.\n` +
+            `  Expected ${authPath()} (run "chronos-sync auth")\n` +
+            `  or legacy ${join(chronosHomeDir(), CONFIG_FILE_NAME)}.\n` +
+            `  https://chronos.brightworks.app/account/auto-upload/install`);
+        this.name = 'ConfigMissingError';
+    }
+}
+/**
+ * Thrown when both `~/.chronos/auth.json` AND a legacy `~/.chronos/config.json`
+ * with embedded credentials/rooms are present. PR5's auth-time precondition
+ * usually prevents this state; this is the defensive sibling check that fires
+ * if the user fiddled manually.
+ */
+export class ConfigConflictError extends Error {
+    constructor() {
+        super(`both auth.json and legacy config.json with embedded credentials/rooms detected. ` +
+            `Pick one — recommended: rm ${join(chronosHomeDir(), CONFIG_FILE_NAME)} ` +
+            `(after copying any unmigrated rooms via "chronos-sync migrate"), or rm ${authPath()} to revert to legacy.`);
+        this.name = 'ConfigConflictError';
+    }
+}
+/**
+ * Thrown when auth.json declares `pat_storage: 'keychain'` but the Keychain
+ * lookup returns null (entry missing) — the user must re-run `chronos-sync
+ * auth`. Distinct error class so the daemon can match it precisely.
+ */
+export class AuthCredentialMissingError extends Error {
+    constructor(detail) {
+        super(`Keychain entry missing for chronos-sync. Re-run "chronos-sync auth" to reauthorize. (${detail})`);
+        this.name = 'AuthCredentialMissingError';
+    }
+}
 export function chronosDir() {
-    return join(homedir(), DAEMON_DIR_NAME);
+    return chronosHomeDir();
 }
 export function configPath() {
     return join(chronosDir(), CONFIG_FILE_NAME);
@@ -29,9 +75,131 @@ export function statePath() {
 export function lockPath() {
     return join(chronosDir(), LOCK_FILE_NAME);
 }
+/**
+ * 4-branch precedence rule (PR6 of auto-upload-server-driven-config plan):
+ *
+ *   (1) auth.json present + (no legacy config.json OR legacy without embedded
+ *       creds/rooms) → AUTH-MODE: read auth.json + bootstrap cache.
+ *   (2) auth.json present + legacy config.json with embedded creds/rooms →
+ *       defensive REFUSE (PR5 precondition usually prevents this).
+ *   (3) legacy config.json only → LEGACY-MODE with one-shot deprecation banner.
+ *   (4) neither → ConfigMissingError.
+ *
+ * Branch 1 returns a synthesized DaemonConfig. When the bootstrap cache is
+ * absent (auth.json present but `chronos-sync` never ran successfully against
+ * a reachable server post-auth), the config returns with `rooms: []` and
+ * `interval_seconds: DEFAULT_INTERVAL_SECONDS`. The daemon uses the empty
+ * rooms list as a signal that it must call `primeBootstrap` before cycling.
+ */
 export async function loadConfig() {
-    const raw = await fs.readFile(configPath(), 'utf8');
-    const parsed = JSON.parse(raw);
+    const auth = await loadAuth().catch(() => null);
+    const legacyParsed = await readLegacyConfigIfPresent();
+    const legacyHasCreds = legacyParsed !== null &&
+        ((typeof legacyParsed.pat === 'string' && legacyParsed.pat.length > 0) ||
+            (Array.isArray(legacyParsed.rooms) && legacyParsed.rooms.length > 0));
+    // Branch 2: defensive refuse.
+    if (auth && legacyHasCreds) {
+        throw new ConfigConflictError();
+    }
+    // Branch 1: auth-mode.
+    if (auth) {
+        return await loadAuthModeConfig(auth);
+    }
+    // Branch 3: legacy.
+    if (legacyParsed !== null) {
+        emitLegacyDeprecationBannerOnce();
+        return parseLegacyConfig(legacyParsed);
+    }
+    // Branch 4.
+    throw new ConfigMissingError();
+}
+async function readLegacyConfigIfPresent() {
+    let raw;
+    try {
+        raw = await fs.readFile(configPath(), 'utf8');
+    }
+    catch (e) {
+        const err = e;
+        if (err.code === 'ENOENT')
+            return null;
+        throw err;
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'object' && parsed !== null) {
+            return parsed;
+        }
+        throw new Error('config.json must be a JSON object');
+    }
+    catch (e) {
+        if (e.name === 'SyntaxError') {
+            throw new Error(`config.json is not valid JSON: ${e.message}`);
+        }
+        throw e;
+    }
+}
+function emitLegacyDeprecationBannerOnce() {
+    if (legacyDeprecationBannerEmitted)
+        return;
+    legacyDeprecationBannerEmitted = true;
+    process.stderr.write('\x1b[33m!\x1b[0m legacy config.json detected; v0.6.0 will reject this. ' +
+        'Run "chronos-sync migrate" to switch to auth-mode.\n');
+}
+/**
+ * Auth-mode config synthesis: auth.json + Keychain/file PAT + bootstrap cache.
+ *
+ * Cache-absent case (auth.json present but `~/.chronos/config.cache.json`
+ * missing) returns a placeholder DaemonConfig with empty rooms so the daemon
+ * can decide whether to prime now (server reachable) or exit loud (offline,
+ * NTH-4). We deliberately do NOT do network I/O here — `primeBootstrap` lives
+ * in the daemon orchestration layer, mirroring the existing
+ * `primeIntervalCache` separation.
+ */
+async function loadAuthModeConfig(auth) {
+    if (!auth)
+        throw new Error('loadAuthModeConfig called without auth');
+    // Resolve PAT — Keychain happy path or `--allow-file-pat` opt-in file.
+    let pat;
+    if (auth.pat_storage === 'keychain') {
+        let resolved = null;
+        try {
+            resolved = await keychainGetPat(auth.user_email);
+        }
+        catch (e) {
+            throw new AuthCredentialMissingError(e.message);
+        }
+        if (!resolved) {
+            throw new AuthCredentialMissingError(`account=${auth.user_email}`);
+        }
+        pat = resolved;
+    }
+    else {
+        const fromFile = await loadPatFile();
+        if (!fromFile) {
+            throw new AuthCredentialMissingError(`auth.token missing at ${join(chronosHomeDir(), 'auth.token')}`);
+        }
+        pat = fromFile;
+    }
+    // Read the cached bootstrap snapshot from disk. Absent → empty rooms; the
+    // daemon prime step will fill it.
+    const snapshot = await loadCachedSnapshotFromDisk();
+    const interval = snapshot?.interval_seconds !== undefined
+        ? clampInterval(snapshot.interval_seconds)
+        : DEFAULT_INTERVAL_SECONDS;
+    return {
+        mode: 'auth',
+        server_url: auth.server_url.replace(/\/+$/, ''),
+        pat,
+        interval_seconds: interval,
+        rooms: snapshot?.rooms ?? [],
+    };
+}
+/**
+ * Validate + normalize a legacy config.json into a DaemonConfig. Same logic
+ * as the v0.4.x `loadConfig` body — extracted so the auth-mode branch can
+ * stay surgical.
+ */
+function parseLegacyConfig(parsed) {
     if (!parsed.server_url || typeof parsed.server_url !== 'string') {
         throw new Error('config.server_url missing or not a string');
     }
@@ -59,6 +227,7 @@ export async function loadConfig() {
     const since = normalizeSinceOverride(parsed.since);
     const harvest = normalizeHarvestThresholds(parsed.harvest);
     return {
+        mode: 'legacy',
         server_url: parsed.server_url.replace(/\/+$/, ''),
         pat: parsed.pat,
         interval_seconds: interval,
