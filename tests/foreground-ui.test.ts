@@ -5,8 +5,7 @@ import {
   formatShutdown,
   ANSI,
 } from '../src/foreground-ui'
-import type { DaemonConfig, RoomConfig } from '../src/types'
-import type { ResolvedInterval } from '../src/interval-resolver'
+import type { DaemonConfig, RoomConfig, ResolvedInterval } from '../src/types'
 
 const baseRoom: RoomConfig = {
   chat_name: 'kakao A',
@@ -28,6 +27,8 @@ describe('formatHeader', () => {
       config: baseConfig,
       configPath: '/u/.chronos/config.json',
       version: '0.1.0-alpha.1',
+      // v0.6.0: cached snapshot supplies the interval (cache > cfg fallback).
+      cachedSnapshot: { interval_seconds: 300 },
     })
     expect(out).toContain('chronos-sync')
     expect(out).toContain('0.1.0-alpha.1')
@@ -64,7 +65,12 @@ describe('formatHeader', () => {
 
   it('renders sub-minute intervals in seconds', () => {
     const cfg: DaemonConfig = { ...baseConfig, interval_seconds: 30 }
-    const out = formatHeader({ config: cfg, configPath: '/x', version: '1' })
+    const out = formatHeader({
+      config: cfg,
+      configPath: '/x',
+      version: '1',
+      cachedSnapshot: { interval_seconds: 30 },
+    })
     expect(out).toContain('30초마다')
   })
 
@@ -113,22 +119,20 @@ describe('formatHeader', () => {
     expect(out).toContain('(default)')
   })
 
-  describe('auth-mode interval placeholder before first prime', () => {
-    const authConfig: DaemonConfig = { ...baseConfig, mode: 'auth' }
-
-    it('shows "서버에서 받아오는 중…" when bootstrap not yet primed', () => {
+  describe('interval placeholder before first prime (v0.6.0 cache-first)', () => {
+    it('shows "서버에서 받아오는 중…" when no resolved and no cached snapshot', () => {
       const out = formatHeader({
-        config: authConfig,
+        config: baseConfig,
         configPath: '/x',
         version: '1',
-        bootstrapPrimed: false,
+        cachedSnapshot: null,
       })
       expect(out).toContain('서버에서 받아오는 중')
-      // The misleading default fallback ("5분") MUST NOT appear.
+      // The misleading cfg-only fallback ("5분") MUST NOT appear pre-prime.
       expect(out).not.toContain('5분마다')
     })
 
-    it('shows the resolved interval once primed', () => {
+    it('shows the resolved interval once a cycle has run', () => {
       const resolved: ResolvedInterval = {
         value: 30,
         source: 'cached',
@@ -136,41 +140,29 @@ describe('formatHeader', () => {
         warning: null,
       }
       const out = formatHeader({
-        config: authConfig,
+        config: baseConfig,
         configPath: '/x',
         version: '1',
         resolved,
-        bootstrapPrimed: true,
+        cachedSnapshot: null,
       })
       expect(out).toContain('30초마다')
       expect(out).not.toContain('서버에서 받아오는 중')
     })
 
-    it('legacy-mode shows the interval even before any resolved value (no placeholder)', () => {
-      // Legacy mode has interval_seconds in config.json directly — there is
-      // no "wait for the server" period, so the placeholder must not appear.
+    it('cached snapshot supplies the interval before any resolved value (root fix)', () => {
+      // v0.6.0 root fix: cached snapshot beats cfg.interval_seconds. Even
+      // without a fresh ResolvedInterval, the cached value is rendered so
+      // the second-and-onward foreground starts do not flash the cfg
+      // default before swapping in the cached value.
       const out = formatHeader({
-        config: { ...baseConfig, mode: 'legacy' },
+        config: { ...baseConfig, interval_seconds: 300 },
         configPath: '/x',
         version: '1',
-        bootstrapPrimed: false,
-      })
-      expect(out).toContain('5분마다')
-      expect(out).not.toContain('서버에서 받아오는 중')
-    })
-
-    it('auth-mode + bootstrapPrimed=true (no resolved) still shows interval (no placeholder)', () => {
-      // Edge case: the bootstrap was primed in a prior cycle, the snapshot is
-      // populated, but this particular printHeader call didn't get a fresh
-      // ResolvedInterval. We should NOT show the placeholder; cfg.interval_seconds
-      // (synthesized from the cached snapshot) is the authoritative value.
-      const out = formatHeader({
-        config: { ...authConfig, interval_seconds: 60 },
-        configPath: '/x',
-        version: '1',
-        bootstrapPrimed: true,
+        cachedSnapshot: { interval_seconds: 60 },
       })
       expect(out).toContain('1분마다')
+      expect(out).not.toContain('5분마다')
       expect(out).not.toContain('서버에서 받아오는 중')
     })
   })

@@ -2,7 +2,7 @@
 
 Mac KakaoTalk → Chronos 동기화 데몬. 웹의 **Auto-Upload** 탭에서 룸 매핑·주기·PAT를 관리하고, 이 CLI는 그 설정을 받아 메시지를 업로드합니다.
 
-> **v0.5.0 (2026-05-11)** — 서버 주도 설정으로 전환. v0.4.x `~/.chronos/config.json` 사용자는 [Migration](#migration-v04x--v05x) 섹션을 참고하세요. 자세한 변경점은 [CHANGELOG.md](CHANGELOG.md).
+> **v0.6.0 (2026-05-11)** — legacy `~/.chronos/config.json` 지원 종료. v0.4.x 사용자는 [Migration](#migration-v04x--v06x) 섹션을 참고하세요 (v0.5.x를 경유). 자세한 변경점은 [CHANGELOG.md](CHANGELOG.md).
 
 ## 요구 사항
 
@@ -14,10 +14,10 @@ Mac KakaoTalk → Chronos 동기화 데몬. 웹의 **Auto-Upload** 탭에서 룸
 | KakaoTalk (Mac) | 실행 중 |
 | Chronos 계정 | PAT 발급 가능한 권한 |
 
-## 설치 (greenfield, v0.5.0)
+## 설치 (greenfield, v0.6.0)
 
 ```bash
-npm install -g @brightworks/chronos-sync@next
+npm install -g @brightworks/chronos-sync@latest
 ```
 
 설치 확인:
@@ -48,11 +48,10 @@ chronos-sync --version
 |---|---|
 | `chronos-sync` (= `run` / `start`) | foreground 동기화 루프. 추천 진입점. |
 | `chronos-sync auth [<PAT>]` | PAT 등록. `--from-stdin`, `--token`, `--reset`, `--allow-file-pat`, `--server-url`. |
-| `chronos-sync migrate` | v0.4.x `config.json` → auth-mode 일회성 변환. `--dry-run`, `--force`. |
 | `chronos-sync daemon` | launchd 호환 백그라운드 모드. 일반 사용자 비권장. |
 | `chronos-sync status` | 룸별 마지막 동기화 시각. |
 | `chronos-sync health` | 헬스 체크 (JSON). 실패 시 exit 1. |
-| `chronos-sync interval <초> \| --get` | 주기 직접 PUT/GET (legacy-mode 잔존). auth-mode에서는 웹 UI 사용 권장. |
+| `chronos-sync interval <초> \| --get` | 주기 직접 PUT/GET. auth-mode에서는 웹 Auto-Upload 탭 사용 권장. |
 | `chronos-sync diagnose senders [chat]` | `참여자_<id>` 폴백 원인 분석. |
 | `chronos-sync harvest` | KakaoTalk UI 자동 스크롤 1회 (수동 backfill). |
 | `chronos-sync version` / `--version` / `-v` | 버전. |
@@ -60,32 +59,21 @@ chronos-sync --version
 
 각 서브커맨드의 상세 도움말은 `chronos-sync <cmd> --help`.
 
-## Migration (v0.4.x → v0.5.x)
+## Migration (v0.4.x → v0.6.x)
 
-v0.4.x는 `~/.chronos/config.json`에 `pat`과 `rooms`를 직접 적었습니다. v0.5.0부터는 PAT는 Keychain, 룸/주기는 서버에서 관리합니다.
+v0.6.0은 legacy `~/.chronos/config.json`을 더 이상 받지 않습니다. v0.4.x에서 직접 v0.6.x로 올라갈 수는 없으므로 v0.5.x의 `chronos-sync migrate`를 한 번 거쳐야 합니다.
 
 ```bash
-chronos-sync migrate --dry-run    # 변경 내용 미리 보기 (서버/Keychain/FS 무변경)
-chronos-sync migrate              # 실행. legacy config.json은 .legacy.bak.<ts>로 rename.
-chronos-sync                      # foreground 재시작 — auth-mode로 부팅
+npm install -g @brightworks/chronos-sync@0.5      # 마지막 v0.5.x로 잠시 내림
+chronos-sync migrate --dry-run                    # (선택) 변경 미리 보기
+chronos-sync migrate                              # 실행 — config.json → auth.json + Keychain
+npm install -g @brightworks/chronos-sync@latest   # v0.6.x로 다시 올림
+chronos-sync                                      # auth-mode로 부팅
 ```
 
-`migrate`가 하는 일 (요약):
+`v0.5.x migrate`가 하는 일은 [v0.5.0 CHANGELOG](CHANGELOG.md#050-2026-05-11) 참조. step 5-9 중 어느 하나라도 실패하면 legacy `config.json`은 보존됩니다 (idempotent — 원인 해결 후 재실행).
 
-1. 실행 중 데몬 검출 — `--force` 없이는 거부.
-2. legacy `config.json` 파싱.
-3. 서버 pre-flight (eligible projects 확인) → archived 룸은 자동 제외.
-4. (옵션) Y/n 확인.
-5. PUT `/api/account/auto-upload/rooms` (legacy PAT 사용).
-6. PUT `/api/account/settings/sync` (legacy interval).
-7. GET `/api/auto-upload/bootstrap` → `user_email` 추출.
-8. PAT를 Keychain에 저장 (또는 `--allow-file-pat`로 0600 파일).
-9. `~/.chronos/auth.json` 작성.
-10. `~/.chronos/config.json` → `config.json.legacy.bak.<timestamp>`로 rename.
-
-step 5-9 중 하나라도 실패하면 step 10(rename)은 실행되지 않고 legacy `config.json`은 그대로 보존됩니다. 사용자는 원인을 해결한 뒤 동일한 명령으로 재시도하면 됩니다 (idempotent).
-
-> **호환 윈도우:** v0.5.x는 legacy `config.json`을 deprecation 배너와 함께 계속 받아들입니다. v0.6.0부터 거부됩니다. v0.6.0 컷오버 시점은 별도 공지 (adoption 지표 ≥80%/14d 기준).
+수동 경로 (advanced): 새 PAT를 발급한 뒤 `mv ~/.chronos/config.json ~/.chronos/config.json.legacy.bak`, `chronos-sync auth chr_pat_…`. 룸 매핑은 웹 Auto-Upload 탭에서 다시 입력합니다.
 
 ## Troubleshooting
 
@@ -103,12 +91,13 @@ CHRONOS_ALLOW_FILE_PAT=1 chronos-sync auth
 
 shared host에서는 권장하지 않습니다.
 
-### Legacy config 감지 (`Legacy config.json detected`)
+### Legacy config 감지 (`Legacy v0.4.x config.json detected`)
 
-`chronos-sync auth` 호출 시 `~/.chronos/config.json`에 `pat` 또는 `rooms`가 남아 있으면 거부됩니다 (PR5 precondition). 먼저 `chronos-sync migrate`로 변환하거나, 이미 인증이 끝났다면 legacy 파일을 직접 옮기세요:
+v0.6.0에서 `~/.chronos/config.json`이 발견되면 daemon은 즉시 `LegacyConfigDetectedError`로 종료합니다. 위 [Migration](#migration-v04x--v06x) 섹션의 v0.5.x 경유 절차를 따르거나, 새 PAT를 발급한 뒤 legacy 파일을 직접 치우세요:
 
 ```bash
 mv ~/.chronos/config.json ~/.chronos/config.json.legacy.bak
+chronos-sync auth chr_pat_…
 ```
 
 ### Bootstrap cache stale > 24h (`bootstrap cache stale > 24h; check network`)
@@ -141,16 +130,6 @@ CHRONOS_HOME=/var/cache/chronos-sync chronos-sync auth
 CHRONOS_HOME=/var/cache/chronos-sync chronos-sync
 ```
 
-### 데몬 실행 중 migrate 시도 (`daemon is running`)
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
-chronos-sync migrate
-launchctl load ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
-```
-
-또는 `chronos-sync migrate --force` (running daemon이 같은 `~/.chronos`에 동시 쓰기를 할 수 있다는 점 감수).
-
 ### Sender 미해결 — 룸이 `consecutive_stuck_cycles` 증가
 
 `chronos-sync diagnose senders <chat>`로 어떤 sender_id가 NTUser에 매칭되지 않는지 확인. 일시적이라면 `chronos-sync harvest`로 강제 backfill.
@@ -163,16 +142,16 @@ launchctl load ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
 | `CHRONOS_ALLOW_FILE_PAT=1` | `--allow-file-pat`과 동일 — Keychain 불가 시 0600 파일에 PAT 저장 동의. |
 | `CHRONOS_NO_CAFFEINATE=1` | foreground 모드에서 macOS idle sleep 방지를 위한 `caffeinate` 자동 attach 비활성화. |
 
-## ~/.chronos 레이아웃 (v0.5.x)
+## ~/.chronos 레이아웃 (v0.6.x)
 
 ```
 ~/.chronos/
-  auth.json              v0.5.0+ 필수. mode 0600. server_url, user_email, pat_hash_prefix, pat_storage, allow_file_pat, written_at.
+  auth.json              필수. mode 0600. server_url, user_email, pat_hash_prefix, pat_storage, allow_file_pat, written_at.
   auth.token             pat_storage='file' 일 때만. mode 0600. PAT 본문 (Keychain 대체).
   config.cache.json      bootstrap snapshot. mode 0600. server_url, user_email, interval_seconds, rooms, etag, fetched_at, last_successful_fetch.
   state.json             데몬-관리. 룸별 cursor + 사이클 상태.
   chronos-sync.lock      single-instance PID lock.
-  config.json.legacy.bak.<ts>   migrate 후 보관용.
+  config.json.legacy.bak.<ts>   v0.5.x migrate 후 보관 (v0.6.x에서 직접 사용 안 함).
 ```
 
 ## launchd 등록 (선택)

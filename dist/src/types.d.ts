@@ -50,20 +50,7 @@ export interface SinceOverride {
      */
     override_seconds?: number;
 }
-/**
- * Daemon load mode. v0.5.0 introduces `auth` mode (auth.json + cached
- * bootstrap snapshot). `legacy` is the v0.4.x `~/.chronos/config.json` shape
- * with embedded `pat` and `rooms` — supported through one minor release with
- * a deprecation banner, hard-refused in v0.6.0.
- */
-export type ConfigMode = 'auth' | 'legacy';
 export interface DaemonConfig {
-    /**
-     * Which storage path produced this config. Set by `loadConfig`. Optional
-     * because tests + ad-hoc constructors may omit it; runtime branches on
-     * `mode === 'auth'` only when present.
-     */
-    mode?: ConfigMode;
     /** Base URL of the Chronos server, e.g. `https://chronos.brightworks.app`. */
     server_url: string;
     /** Personal Access Token (`chr_pat_<32hex>`). */
@@ -161,6 +148,23 @@ export interface RoomState {
     consecutive_stuck_cycles?: number;
 }
 export type IntervalSource = 'server' | 'cached' | 'config' | 'default';
+/**
+ * Foreground UI rendering shape for the active sync interval. Returned by
+ * the daemon at the end of each cycle so the header / cycle line can render
+ * source provenance and any operator-visible warning.
+ *
+ * v0.6.0 narrows `source` to `'cached'` in steady-state operation
+ * (bootstrap-resolver is the single truth) but the wider union stays for
+ * the placeholder/missing edge cases.
+ */
+export interface ResolvedInterval {
+    value: number;
+    source: IntervalSource;
+    /** ISO 8601 timestamp of the snapshot the value came from. */
+    fetched_at: string;
+    /** Visible warning to surface in foreground header. null if no warning. */
+    warning: string | null;
+}
 /**
  * Persisted interval cache shape from v0.2.x. v0.3.0+ no longer writes
  * this field (the cache lives in `src/interval-resolver.ts` module

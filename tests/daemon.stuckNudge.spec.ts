@@ -23,16 +23,15 @@ import type { DaemonConfig } from '../src/types'
 import type { KakaoCliMessage } from '../src/csv-reassemble'
 import { DEFAULT_HARVEST_STUCK_NUDGE_THRESHOLD } from '../src/types'
 
-vi.mock('../src/interval-resolver', () => ({
-  primeIntervalCache: vi.fn().mockResolvedValue(undefined),
-  getCachedInterval: vi.fn().mockReturnValue({
-    value: 60,
-    source: 'config',
-    fetched_at: new Date().toISOString(),
-    warning: null,
-  }),
-  resetIntervalCacheForTest: vi.fn(),
+const bootstrapMocks = vi.hoisted(() => ({
+  primeBootstrap: vi.fn(),
+  getBootstrap: vi.fn(),
+  peekCachedSnapshot: vi.fn(),
+  bootstrapStatusLabel: vi.fn(),
+  loadCachedSnapshotFromDisk: vi.fn(),
+  resetBootstrapCacheForTest: vi.fn(),
 }))
+vi.mock('../src/bootstrap-resolver', () => bootstrapMocks)
 
 vi.mock('../src/kakaocli', () => ({
   listMessages: vi.fn(),
@@ -109,6 +108,17 @@ beforeEach(async () => {
   process.env.HOME = tmp
   await fs.mkdir(join(tmp, '.chronos'), { recursive: true })
   vi.resetAllMocks()
+  // Re-establish bootstrap-resolver mock defaults wiped by resetAllMocks().
+  bootstrapMocks.getBootstrap.mockReturnValue({
+    snapshot: null,
+    warning: null,
+    refuse: false,
+    status: 'ok',
+  })
+  bootstrapMocks.peekCachedSnapshot.mockReturnValue(null)
+  bootstrapMocks.bootstrapStatusLabel.mockReturnValue('ok (1s ago)')
+  bootstrapMocks.loadCachedSnapshotFromDisk.mockResolvedValue(null)
+  bootstrapMocks.primeBootstrap.mockResolvedValue(undefined)
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
   vi.mocked(harvestScroll).mockResolvedValue({ code: 0, stderr: '' })

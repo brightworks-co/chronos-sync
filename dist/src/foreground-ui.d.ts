@@ -6,8 +6,7 @@
  * (green ✓ for success / red ✗ for error). No JSONL — that stream is
  * available via `chronos-sync daemon` for log-aggregation pipelines.
  */
-import type { DaemonConfig, RoomConfig } from './types.js';
-import type { ResolvedInterval } from './interval-resolver.js';
+import type { DaemonConfig, RoomConfig, ResolvedInterval } from './types.js';
 export declare const ANSI: {
     readonly reset: "\u001B[0m";
     readonly green: "\u001B[32m";
@@ -22,9 +21,8 @@ export interface PrintHeaderInputs {
     version: string;
     resolved?: ResolvedInterval;
     /**
-     * Auth-mode storage backend (`keychain` or `file`). Surfaced in the header
-     * so the user can confirm at a glance which storage path is in effect.
-     * Undefined in legacy-mode.
+     * PAT storage backend (`keychain` or `file`). Surfaced in the header so the
+     * user can confirm at a glance which storage path is in effect.
      */
     patStorage?: 'keychain' | 'file';
     /**
@@ -34,12 +32,13 @@ export interface PrintHeaderInputs {
      */
     bootstrapLabel?: string;
     /**
-     * Tri-state override for the interval-prime probe. When omitted the renderer
-     * derives this from `peekCachedSnapshot() != null`. Tests inject a literal
-     * boolean for determinism. Auth-mode + `false` → render the
-     * `서버에서 받아오는 중…` placeholder instead of the default interval.
+     * Override for the cached bootstrap snapshot. When omitted the renderer
+     * calls `peekCachedSnapshot()` directly. Tests inject a literal value to
+     * pin the precedence behavior without spinning up the resolver state.
      */
-    bootstrapPrimed?: boolean;
+    cachedSnapshot?: {
+        interval_seconds: number;
+    } | null;
 }
 /** Build the startup banner shown when foreground mode boots. */
 export declare function formatHeader(inputs: PrintHeaderInputs): string;

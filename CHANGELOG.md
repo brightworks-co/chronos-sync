@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.0 (2026-05-11)
+
+Legacy purge — `~/.chronos/config.json` is no longer accepted. Auth-mode (introduced in v0.5.0) is now the only supported entry point.
+
+### Removed (BREAKING)
+
+- **`chronos-sync migrate` subcommand removed.** The one-shot v0.4.x → auth-mode converter shipped in v0.5.0. v0.6.0 users on v0.4.x must migrate via v0.5.x first (or set up auth-mode from scratch with `chronos-sync auth`). See [Migration](#migration-v04x--v06x) below for the recommended path.
+- **`src/interval-resolver.ts` deleted.** `bootstrap-resolver` has been the sole source of truth for `interval_seconds` and `rooms` since v0.5.0; the dormant legacy fetch path is now gone (~137 LOC). The `IntervalCache` schema field on `state.json` is also removed; older state files parse cleanly because the field is dropped on read, not asserted.
+- **`src/daemon-detect.ts` and the `pgrep` + `launchctl` running-daemon probe deleted.** Only ever called from `chronos-sync migrate`.
+- **`DaemonConfig.mode` discriminator removed.** Auth-mode is implicit. Tests asserting `cfg.mode === 'auth'` should drop the assertion.
+- **Legacy deprecation banner deleted.** v0.5.x emitted a one-shot stderr banner when it detected a v0.4.x `config.json`; v0.6.0 throws `LegacyConfigDetectedError` and exits non-zero instead. The `resetLegacyDeprecationBannerForTest` test helper is no longer exported.
+
+### Changed
+
+- **`loadConfig()` is auth-only.** The 4-branch dispatcher from v0.5.0 collapses to: auth.json present → `loadAuthModeConfig()`; legacy `config.json` only → throw `LegacyConfigDetectedError`; nothing → throw `ConfigMissingError`. No banner, no fall-through, no implicit reads of `pat` / `rooms` from `config.json`.
+- **`runCycle` calls `getCachedBootstrap()` unconditionally on every cycle.** v0.5.x gated the call behind `mode === 'auth'`; that branch is gone, so the resolver is now the single source of truth for both interval and rooms in every cycle.
+- **Foreground UI interval precedence fix.** `formatHeader` now reads `inputs.resolved?.value ?? cachedSnapshot?.interval_seconds ?? cfg.interval_seconds`. The cached bootstrap snapshot wins over the cfg fallback, so the second-and-onward foreground starts no longer briefly flash the cfg default (e.g. `5분`) before swapping in the cached value (e.g. `30초`) once the first cycle lands. Tests can inject `cachedSnapshot` on `PrintHeaderInputs` for determinism.
+- **Tests rebased on v0.6.0.** `tests/daemon.{bootGuard,graceCycle,holdBackRegression,stuckNudge}.spec.ts` migrated to the `vi.hoisted()` bootstrap-resolver mock pattern with re-establishment after `vi.resetAllMocks()`. `tests/state-file.test.ts` rewrites the legacy-config schema cases as `LegacyConfigDetectedError` / `ConfigMissingError` gate tests. Full suite: 33 files / 392 tests PASS.
+
+### Migration (v0.4.x → v0.6.x)
+
+Direct v0.4.x → v0.6.x is **not** supported on the CLI side. Recommended paths:
+
+- **Greenfield (no v0.4.x state):** `chronos-sync auth chr_pat_…` — done.
+- **Existing v0.4.x users:**
+  ```bash
+  npm install -g @brightworks/chronos-sync@0.5         # install last v0.5.x
+  chronos-sync migrate                                  # one-shot conversion
+  npm install -g @brightworks/chronos-sync@latest       # upgrade to v0.6.x
+  ```
+  v0.5.x's `migrate` performs the legacy `config.json` → auth-mode conversion (Keychain or `--allow-file-pat`, optional `--dry-run`). After it runs, v0.6.x boots cleanly because `auth.json` is in place.
+- **Manual route (advanced):** issue a fresh PAT, `mv ~/.chronos/config.json ~/.chronos/config.json.legacy.bak`, then `chronos-sync auth chr_pat_…`. Re-map your rooms in the web Auto-Upload tab.
+
 ## 0.5.0 (2026-05-11)
 
 Server-driven config. The web account "Auto-Upload" tab now manages interval + room mappings; the CLI no longer needs a hand-edited `~/.chronos/config.json`.
