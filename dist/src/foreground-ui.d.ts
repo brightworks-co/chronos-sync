@@ -33,6 +33,13 @@ export interface PrintHeaderInputs {
      * resolver directly. Tests can inject a fixed label for determinism.
      */
     bootstrapLabel?: string;
+    /**
+     * Tri-state override for the interval-prime probe. When omitted the renderer
+     * derives this from `peekCachedSnapshot() != null`. Tests inject a literal
+     * boolean for determinism. Auth-mode + `false` → render the
+     * `서버에서 받아오는 중…` placeholder instead of the default interval.
+     */
+    bootstrapPrimed?: boolean;
 }
 /** Build the startup banner shown when foreground mode boots. */
 export declare function formatHeader(inputs: PrintHeaderInputs): string;

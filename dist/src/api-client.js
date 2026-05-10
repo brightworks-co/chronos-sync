@@ -61,6 +61,89 @@ export async function getBootstrap(opts, etag) {
     return { status: 200, payload: validateBootstrapBody(body), etag: responseEtag };
 }
 /**
+ * GET `/api/auto-upload/projects` with PAT auth — returns the list of
+ * projects whose room mappings the user is allowed to PUT. Used by
+ * `chronos-sync migrate` pre-flight (MAJ-8.2) to filter legacy rows
+ * pointing at archived/inaccessible projects.
+ */
+export async function listEligibleProjects(opts) {
+    const { serverUrl, pat, timeoutMs = 5000 } = opts;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+        res = await fetch(`${serverUrl}/api/auto-upload/projects`, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${pat}`,
+                Accept: 'application/json',
+            },
+            signal: controller.signal,
+        });
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    if (res.status === 401)
+        throw new ApiPatAuthError();
+    if (!res.ok) {
+        throw new Error(`Eligible projects GET failed: HTTP ${res.status}`);
+    }
+    const body = (await res.json());
+    if (!Array.isArray(body.projects)) {
+        throw new Error('Invalid /api/auto-upload/projects response: projects must be an array');
+    }
+    return body.projects.map((p, i) => {
+        if (typeof p !== 'object' || p === null) {
+            throw new Error(`Invalid project at index ${i}: expected object`);
+        }
+        const proj = p;
+        if (typeof proj.id !== 'string' || proj.id.length === 0) {
+            throw new Error(`Invalid project at index ${i}: id must be a non-empty string`);
+        }
+        return {
+            id: proj.id,
+            name: typeof proj.name === 'string' ? proj.name : undefined,
+            archived: typeof proj.archived === 'boolean' ? proj.archived : false,
+        };
+    });
+}
+export async function putAutoUploadRooms(opts, rows) {
+    const { serverUrl, pat, timeoutMs = 5000 } = opts;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+        res = await fetch(`${serverUrl}/api/account/auto-upload/rooms`, {
+            method: 'PUT',
+            headers: {
+                Authorization: `Bearer ${pat}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ rows }),
+            signal: controller.signal,
+        });
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    if (res.status === 401)
+        throw new ApiPatAuthError();
+    if (!res.ok) {
+        let detail = '';
+        try {
+            const errBody = (await res.json());
+            if (errBody.error)
+                detail = `: ${errBody.error}`;
+        }
+        catch {
+            // body not JSON
+        }
+        throw new Error(`Auto-upload rooms PUT failed: HTTP ${res.status}${detail}`);
+    }
+}
+/**
  * DELETE `/api/account/auto-upload/rooms/{project_id}/{room_name}` — clears
  * `auto_mac_uploader` for that room. Used by `chronos-sync auth --reset`
  * to release a previously claimed room before issuing a new PAT.
