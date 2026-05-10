@@ -28,6 +28,14 @@ interface CycleOutcome {
     uploaded_rooms: number;
     /** Number of rooms whose cycle failed (kakaocli or HTTP). */
     failed_rooms: number;
+    /**
+     * Set when auth-mode bootstrap-resolver classifies the snapshot as
+     * `refuse: true` — either 24h continuous-failure ceiling exceeded
+     * (`refused-stale`) or the on-disk cache was invalidated by a 401/403
+     * response (`refused-auth`/`missing`). Caller (runLoop) translates this
+     * into a non-zero exit per CRIT-3.
+     */
+    refused?: 'refused-stale' | 'refused-auth' | 'missing';
 }
 export type DaemonLog = (level: 'info' | 'warn' | 'error', msg: string, ctx?: unknown) => void;
 export interface RoomCycleResult {

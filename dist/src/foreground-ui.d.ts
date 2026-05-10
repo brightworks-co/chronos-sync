@@ -21,6 +21,18 @@ export interface PrintHeaderInputs {
     configPath: string;
     version: string;
     resolved?: ResolvedInterval;
+    /**
+     * Auth-mode storage backend (`keychain` or `file`). Surfaced in the header
+     * so the user can confirm at a glance which storage path is in effect.
+     * Undefined in legacy-mode.
+     */
+    patStorage?: 'keychain' | 'file';
+    /**
+     * Pre-resolved bootstrap status label (e.g. `ok (3s ago)`, `stale (21h ago)`,
+     * `refused (>24h)`, `missing`). When omitted, the renderer queries the
+     * resolver directly. Tests can inject a fixed label for determinism.
+     */
+    bootstrapLabel?: string;
 }
 /** Build the startup banner shown when foreground mode boots. */
 export declare function formatHeader(inputs: PrintHeaderInputs): string;
