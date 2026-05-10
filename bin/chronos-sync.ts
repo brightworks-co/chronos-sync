@@ -9,6 +9,8 @@
  *
  * Subcommands:
  *   (none) | run | start  Foreground mode (default — the user-facing entry).
+ *   auth [<PAT>]          Register a PAT (Keychain happy path; `--allow-file-pat`
+ *                         opt-in falls back to mode 0600 file). v0.5.0+.
  *   daemon                Background loop for launchd. Deprecated for human use;
  *                         retained so existing launchd plists keep working.
  *   daemon --status       Raw JSON daemon snapshot (internal).
@@ -104,6 +106,30 @@ switch (cmd) {
     })
     break
 
+  case 'auth':
+    Promise.all([
+      import('../src/cli/auth.js'),
+      import('../src/cli/auth-args.js'),
+    ])
+      .then(async ([authModule, argsModule]) => {
+        const parsed = argsModule.parseAuthArgs(args)
+        if (parsed.kind === 'help') {
+          printAuthUsage()
+          process.exit(0)
+        }
+        if (parsed.kind === 'invalid') {
+          process.stderr.write(`error: ${parsed.message}\n`)
+          process.exit(1)
+        }
+        const result = await authModule.runAuth(parsed.options)
+        process.exit(result.exitCode)
+      })
+      .catch((err: unknown) => {
+        process.stderr.write('chronos-sync: auth error: ' + String(err) + '\n')
+        process.exit(1)
+      })
+    break
+
   case 'health':
     import('../src/state-file.js').then(async (stateModule) => {
       const { checkHealth } = await import('../src/health.js')
@@ -144,6 +170,9 @@ function printUsage(): void {
   chronos-sync              터미널에서 동기화 시작 (Ctrl+C로 종료)
 
 명령어:
+  auth [<PAT>]              PAT 등록 (Keychain 우선, --allow-file-pat 시 0600 파일).
+                            옵션: --from-stdin, --token <PAT>, --server-url <url>,
+                                  --allow-file-pat, --reset, --help
   status                    설정 + 룸별 마지막 동기화 시각
   health                    헬스 체크 결과 (JSON)
   interval <초>             동기화 주기 변경 (10~3600). 데몬 다음 cycle 자동 반영.
@@ -157,6 +186,31 @@ function printUsage(): void {
   help                      도움말 표시
 `)
 }
+
+function printAuthUsage(): void {
+  process.stdout.write(`chronos-sync auth — PAT 등록 + 부트스트랩 프라임
+
+사용:
+  chronos-sync auth                        대화형 프롬프트 (입력 숨김)
+  chronos-sync auth <PAT>                  PAT를 명령줄로 직접 (셸 히스토리 노출 경고)
+  pbpaste | chronos-sync auth --from-stdin 클립보드 / 스크립트용
+  chronos-sync auth --reset                기존 PAT의 룸 등록 해제 후 새 PAT로 교체
+
+옵션:
+  --token <PAT>             명시적 PAT (--<PAT>와 동일하지만 위치 인자 대신 플래그)
+  --from-stdin              stdin 한 줄 읽어서 PAT로 사용
+  --server-url <url>        chronos 서버 URL (기본: https://chronos.brightworks.app)
+  --allow-file-pat          Keychain 사용 불가 시 ~/.chronos/auth.token (mode 0600)에 저장.
+                            CHRONOS_ALLOW_FILE_PAT=1 환경변수도 동일.
+  --reset                   기존 auth + Keychain entry 삭제, 등록된 룸 해제, 새 PAT 등록.
+  --help                    이 도움말
+
+환경변수:
+  CHRONOS_HOME              ~/.chronos 대신 사용할 경로 (read-only HOME 등)
+  CHRONOS_ALLOW_FILE_PAT=1  --allow-file-pat과 동일
+`)
+}
+
 
 function runForeground(): void {
   Promise.all([
