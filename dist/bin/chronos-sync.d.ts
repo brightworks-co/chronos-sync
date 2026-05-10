@@ -11,6 +11,10 @@
  *   (none) | run | start  Foreground mode (default — the user-facing entry).
  *   auth [<PAT>]          Register a PAT (Keychain happy path; `--allow-file-pat`
  *                         opt-in falls back to mode 0600 file). v0.5.0+.
+ *   migrate               One-shot v0.4.x config.json → auth-mode conversion.
+ *                         `--dry-run` prints intended changes without touching
+ *                         server/Keychain/FS. `--force` skips daemon detect +
+ *                         confirm prompt. v0.5.0+.
  *   daemon                Background loop for launchd. Deprecated for human use;
  *                         retained so existing launchd plists keep working.
  *   daemon --status       Raw JSON daemon snapshot (internal).

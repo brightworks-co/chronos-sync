@@ -47,6 +47,34 @@ export type BootstrapResult = {
  */
 export declare function getBootstrap(opts: ApiClientOptions, etag?: string): Promise<BootstrapResult>;
 /**
+ * Single eligible project (subset of fields chronos-sync needs).
+ * Mirrors the chronos web `/api/auto-upload/projects` response shape; we
+ * keep the type structural so PR1/PR2 schema additions don't break us.
+ */
+export interface EligibleProject {
+    id: string;
+    name?: string;
+    archived?: boolean;
+}
+/**
+ * GET `/api/auto-upload/projects` with PAT auth — returns the list of
+ * projects whose room mappings the user is allowed to PUT. Used by
+ * `chronos-sync migrate` pre-flight (MAJ-8.2) to filter legacy rows
+ * pointing at archived/inaccessible projects.
+ */
+export declare function listEligibleProjects(opts: ApiClientOptions): Promise<EligibleProject[]>;
+/**
+ * Whole-payload PUT to `/api/account/auto-upload/rooms` (PR1 contract).
+ * Replaces (not merges) the user's room mapping list.
+ */
+export interface AutoUploadMappingRow {
+    project_id: string;
+    room_name: string;
+    /** String wire form; never coerced to number (Number.MAX_SAFE_INTEGER risk). */
+    chat_id: string;
+}
+export declare function putAutoUploadRooms(opts: ApiClientOptions, rows: AutoUploadMappingRow[]): Promise<void>;
+/**
  * DELETE `/api/account/auto-upload/rooms/{project_id}/{room_name}` — clears
  * `auto_mac_uploader` for that room. Used by `chronos-sync auth --reset`
  * to release a previously claimed room before issuing a new PAT.
