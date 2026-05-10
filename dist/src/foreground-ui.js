@@ -8,7 +8,7 @@
  */
 import { configPath } from './state-file.js';
 import { VERSION } from './constants.js';
-import { bootstrapStatusLabel } from './bootstrap-resolver.js';
+import { bootstrapStatusLabel, peekCachedSnapshot } from './bootstrap-resolver.js';
 export const ANSI = {
     reset: '\x1b[0m',
     green: '\x1b[32m',
@@ -24,14 +24,25 @@ export function formatHeader(inputs) {
     lines.push(`${ANSI.dim}config:${ANSI.reset} ${inputs.configPath}`);
     lines.push(`${ANSI.dim}서버:${ANSI.reset}   ${inputs.config.server_url}`);
     lines.push(`${ANSI.dim}룸:${ANSI.reset}     ${inputs.config.rooms.length}개 매핑 — ${formatRoomList(inputs.config.rooms)}`);
-    const intervalSeconds = inputs.resolved?.value ?? inputs.config.interval_seconds;
-    const source = inputs.resolved?.source;
-    const minutes = intervalSeconds / 60;
-    const pretty = minutes >= 1 && Number.isInteger(minutes)
-        ? `${minutes}분`
-        : `${intervalSeconds}초`;
-    const sourceTag = source ? ` (${source})` : '';
-    lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`);
+    // Auth-mode + first cycle hasn't primed yet → don't show the misleading
+    // default fallback (e.g. "5분" while the actual server value is 30초).
+    // Render a placeholder instead; the next printHeader() (after primeBootstrap
+    // 200/304 lands) will swap in the real value.
+    const primed = inputs.bootstrapPrimed !== undefined ? inputs.bootstrapPrimed : peekCachedSnapshot() !== null;
+    const showPrimePlaceholder = inputs.config.mode === 'auth' && inputs.resolved === undefined && !primed;
+    if (showPrimePlaceholder) {
+        lines.push(`${ANSI.dim}주기:${ANSI.reset}   서버에서 받아오는 중… — 끄려면 Ctrl+C 또는 터미널 닫기`);
+    }
+    else {
+        const intervalSeconds = inputs.resolved?.value ?? inputs.config.interval_seconds;
+        const source = inputs.resolved?.source;
+        const minutes = intervalSeconds / 60;
+        const pretty = minutes >= 1 && Number.isInteger(minutes)
+            ? `${minutes}분`
+            : `${intervalSeconds}초`;
+        const sourceTag = source ? ` (${source})` : '';
+        lines.push(`${ANSI.dim}주기:${ANSI.reset}   ${pretty}마다 동기화${sourceTag} — 끄려면 Ctrl+C 또는 터미널 닫기`);
+    }
     if (inputs.config.mode === 'auth') {
         const bootstrap = inputs.bootstrapLabel ?? bootstrapStatusLabel();
         const pat = inputs.patStorage ?? 'keychain';

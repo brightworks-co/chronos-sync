@@ -112,6 +112,68 @@ describe('formatHeader', () => {
     const out = formatHeader({ config: baseConfig, configPath: '/x', version: '1', resolved })
     expect(out).toContain('(default)')
   })
+
+  describe('auth-mode interval placeholder before first prime', () => {
+    const authConfig: DaemonConfig = { ...baseConfig, mode: 'auth' }
+
+    it('shows "서버에서 받아오는 중…" when bootstrap not yet primed', () => {
+      const out = formatHeader({
+        config: authConfig,
+        configPath: '/x',
+        version: '1',
+        bootstrapPrimed: false,
+      })
+      expect(out).toContain('서버에서 받아오는 중')
+      // The misleading default fallback ("5분") MUST NOT appear.
+      expect(out).not.toContain('5분마다')
+    })
+
+    it('shows the resolved interval once primed', () => {
+      const resolved: ResolvedInterval = {
+        value: 30,
+        source: 'cached',
+        fetched_at: new Date().toISOString(),
+        warning: null,
+      }
+      const out = formatHeader({
+        config: authConfig,
+        configPath: '/x',
+        version: '1',
+        resolved,
+        bootstrapPrimed: true,
+      })
+      expect(out).toContain('30초마다')
+      expect(out).not.toContain('서버에서 받아오는 중')
+    })
+
+    it('legacy-mode shows the interval even before any resolved value (no placeholder)', () => {
+      // Legacy mode has interval_seconds in config.json directly — there is
+      // no "wait for the server" period, so the placeholder must not appear.
+      const out = formatHeader({
+        config: { ...baseConfig, mode: 'legacy' },
+        configPath: '/x',
+        version: '1',
+        bootstrapPrimed: false,
+      })
+      expect(out).toContain('5분마다')
+      expect(out).not.toContain('서버에서 받아오는 중')
+    })
+
+    it('auth-mode + bootstrapPrimed=true (no resolved) still shows interval (no placeholder)', () => {
+      // Edge case: the bootstrap was primed in a prior cycle, the snapshot is
+      // populated, but this particular printHeader call didn't get a fresh
+      // ResolvedInterval. We should NOT show the placeholder; cfg.interval_seconds
+      // (synthesized from the cached snapshot) is the authoritative value.
+      const out = formatHeader({
+        config: { ...authConfig, interval_seconds: 60 },
+        configPath: '/x',
+        version: '1',
+        bootstrapPrimed: true,
+      })
+      expect(out).toContain('1분마다')
+      expect(out).not.toContain('서버에서 받아오는 중')
+    })
+  })
 })
 
 describe('formatCycleLine', () => {
