@@ -114,7 +114,7 @@ export async function listMessages(
  *   1. Object form (`kakaocli messages --json`):
  *      `"sender_id": 8181328792600516744`  →  `"sender_id": "8181..."`
  *   2. Tuple form (`kakaocli query` 2-D array of `[userId, name]`):
- *      `[6321186593654462422, "드림솔져"]`  →  `["6321...", "드림솔져"]`
+ *      `[6321186593654462422, "user-7"]`  →  `["6321...", "user-7"]`
  *      Without this the v0.2.7 dho stuck regression happens — every 19-
  *      digit open-chat sender resolves to a rounded map key that no
  *      caller can match.
