@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 (2026-05-11)
+
+Hotfix: a single KakaoTalk system message was enough to lock a freshly-mapped room into a permanent hold-back loop.
+
+### Fixed
+
+- **`enrichSenders` now treats `sender_id <= 0` rows as "시스템".** KakaoTalk system / hidden / placeholder messages — most commonly `type=1999` ("관리자가 메시지를 가렸습니다") and join/leave notices — carry an `authorId` of `0`, so `resolveSenderNames` can never resolve them. Before this fix, the sender was left as `null`, the cycle's hold-back filter classified the message as unresolved, and `consecutive_stuck_cycles` incremented forever — manifesting as `unresolved senders — cycle held back, cursor unchanged {"sample_sender_ids":[0]}` log lines on a freshly-added room with any system message in its history. The row is now annotated with `sender: '시스템'` so the hold-back filter passes and the cycle progresses normally.
+- Same coverage applied to non-numeric / `0`-prefix string sender_ids that fall through `kakaocli`'s BigInt-preserving JSON parser.
+
+### Tests
+
+- 2 new regression cases in `tests/daemon.test.ts > enrichSenders` — `sender_id=0`, `sender_id=-1`, `sender_id='0'`, and a malformed string. Full suite: 33 files / 394 tests PASS.
+
 ## 0.6.0 (2026-05-11)
 
 Legacy purge — `~/.chronos/config.json` is no longer accepted. Auth-mode (introduced in v0.5.0) is now the only supported entry point.

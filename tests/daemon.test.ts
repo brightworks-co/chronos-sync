@@ -411,6 +411,38 @@ describe('enrichSenders', () => {
     expect(resolveSenderNames).not.toHaveBeenCalled()
   })
 
+  it('marks sender_id<=0 system rows as 시스템 so the cycle does not hold back forever (PR #26)', async () => {
+    // KakaoTalk type 1999 ("관리자가 메시지를 가렸습니다") and join/leave
+    // notices carry sender_id 0; resolveSenderNames cannot resolve them
+    // and the hold-back filter would otherwise block the cycle indefinitely.
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
+    const out = await enrichSenders(
+      [
+        row({ sender_id: 0, text: '관리자가 메시지를 가렸습니다.' }),
+        row({ sender_id: -1, text: 'join notice' }),
+      ],
+      undefined,
+      () => {}
+    )
+    expect(out[0].sender).toBe('시스템')
+    expect(out[1].sender).toBe('시스템')
+    // resolveSenderNames must not be called for system rows — they have
+    // no NTUser counterpart.
+    expect(resolveSenderNames).not.toHaveBeenCalled()
+  })
+
+  it('marks non-numeric / zero-prefix string sender_ids as 시스템', async () => {
+    vi.mocked(resolveSenderNames).mockResolvedValue(new Map())
+    const out = await enrichSenders(
+      [row({ sender_id: '0', text: 'system 0' }), row({ sender_id: 'abc', text: 'malformed' })],
+      undefined,
+      () => {}
+    )
+    expect(out[0].sender).toBe('시스템')
+    expect(out[1].sender).toBe('시스템')
+    expect(resolveSenderNames).not.toHaveBeenCalled()
+  })
+
   it('uses 나 for is_from_me rows without a sender', async () => {
     const out = await enrichSenders(
       [row({ sender: null, is_from_me: true })],
