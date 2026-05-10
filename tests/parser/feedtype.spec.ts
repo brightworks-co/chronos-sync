@@ -30,10 +30,10 @@ describe('parseFeedTypeText', () => {
 
   it('preserves nested member arrays', () => {
     const text =
-      '{"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"드림솔져"}]}'
+      '{"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"user-7"}]}'
     const payload = parseFeedTypeText(text)
     expect(payload?.feedType).toBe(4)
-    expect(payload?.members?.[0]?.nickName).toBe('드림솔져')
+    expect(payload?.members?.[0]?.nickName).toBe('user-7')
   })
 
   it('returns null for non-JSON text', () => {
@@ -59,9 +59,9 @@ describe('feedTypeToPlaceholder', () => {
     expect(
       feedTypeToPlaceholder({
         feedType: 4,
-        members: [{ userId: 1, nickName: '드림솔져' }],
+        members: [{ userId: 1, nickName: 'user-7' }],
       })
-    ).toBe('드림솔져님이 들어왔습니다')
+    ).toBe('user-7님이 들어왔습니다')
   })
 
   it('falls back to "멤버" when feedType=4 has no nickName', () => {

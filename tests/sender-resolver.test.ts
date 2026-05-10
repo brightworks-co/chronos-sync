@@ -39,12 +39,12 @@ describe('parseQueryRows', () => {
     // the messages parser) before JSON.parse so map keys retain full
     // precision and align exactly with caller lookup keys.
     const stdout =
-      '[[6321186593654462422, "드림솔져(헬)"], [7372629836270768733, "뀰꿀"], [6763166015463444794, "키루파(A)"]]'
+      '[[6321186593654462422, "user-7"], [7372629836270768733, "user-8"], [6763166015463444794, "user-9"]]'
     const map = parseQueryRows(stdout)
     expect(map.size).toBe(3)
-    expect(map.get('6321186593654462422')).toBe('드림솔져(헬)')
-    expect(map.get('7372629836270768733')).toBe('뀰꿀')
-    expect(map.get('6763166015463444794')).toBe('키루파(A)')
+    expect(map.get('6321186593654462422')).toBe('user-7')
+    expect(map.get('7372629836270768733')).toBe('user-8')
+    expect(map.get('6763166015463444794')).toBe('user-9')
   })
 
   it('accepts userId as a string and preserves precision', () => {
