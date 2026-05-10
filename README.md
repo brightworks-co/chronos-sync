@@ -1,7 +1,8 @@
 # chronos-sync
 
-Mac KakaoTalk 메시지를 Chronos 서버로 자동 동기화하는 CLI 데몬입니다.  
-[kakaocli](https://github.com/silver-flight-group/kakaocli)를 통해 Mac KakaoTalk 로컬 DB를 읽고, 지정한 채팅방의 메시지를 주기적으로 업로드합니다.
+Mac KakaoTalk → Chronos 동기화 데몬. 웹의 **Auto-Upload** 탭에서 룸 매핑·주기·PAT를 관리하고, 이 CLI는 그 설정을 받아 메시지를 업로드합니다.
+
+> **v0.5.0 (2026-05-11)** — 서버 주도 설정으로 전환. v0.4.x `~/.chronos/config.json` 사용자는 [Migration](#migration-v04x--v05x) 섹션을 참고하세요. 자세한 변경점은 [CHANGELOG.md](CHANGELOG.md).
 
 ## 요구 사항
 
@@ -9,13 +10,14 @@ Mac KakaoTalk 메시지를 Chronos 서버로 자동 동기화하는 CLI 데몬�
 |------|------|
 | macOS | 12 Monterey 이상 |
 | Node.js | 20.0.0 이상 |
-| kakaocli | 최신 버전 권장 |
-| KakaoTalk (Mac) | 실행 중 상태 유지 |
+| kakaocli | 최신 권장 |
+| KakaoTalk (Mac) | 실행 중 |
+| Chronos 계정 | PAT 발급 가능한 권한 |
 
-## 설치
+## 설치 (greenfield, v0.5.0)
 
 ```bash
-npm install -g @brightworks/chronos-sync
+npm install -g @brightworks/chronos-sync@next
 ```
 
 설치 확인:
@@ -24,193 +26,180 @@ npm install -g @brightworks/chronos-sync
 chronos-sync --version
 ```
 
-## 설정
+## 빠른 시작 (4 step)
 
-설정 파일 위치: `~/.chronos/config.json`
+1. **PAT 발급** — `https://chronos.brightworks.app/account/api/tokens`에서 새 토큰을 만듭니다 (`chr_pat_<32hex>` 형식). PAT는 한 번만 표시되니 즉시 클립보드에 복사하세요.
+2. **웹에서 Auto-Upload 설정** — `https://chronos.brightworks.app/account/auto-upload`에서 룸 매핑(KakaoTalk chat_id ↔ Chronos `project_id/room_name`)과 동기화 주기를 입력합니다.
+3. **PAT 등록** — Mac 터미널에서:
+   ```bash
+   chronos-sync auth                        # 대화형 (입력 숨김)
+   pbpaste | chronos-sync auth --from-stdin # 또는 클립보드에서
+   ```
+   PAT는 macOS Keychain에 저장됩니다. Keychain 사용이 불가하면 `--allow-file-pat`으로 mode-0600 파일 저장에 명시적으로 동의해야 합니다.
+4. **데몬 기동** —
+   ```bash
+   chronos-sync                             # foreground (Ctrl+C로 종료)
+   ```
+   상시 백그라운드는 launchd plist를 만들어 `chronos-sync daemon`을 등록합니다. 예시 plist는 아래 [launchd 등록](#launchd-등록-선택) 참조.
 
-디렉터리가 없으면 먼저 생성합니다:
+## 명령어 요약
 
-```bash
-mkdir -p ~/.chronos
-```
+| 명령 | 설명 |
+|---|---|
+| `chronos-sync` (= `run` / `start`) | foreground 동기화 루프. 추천 진입점. |
+| `chronos-sync auth [<PAT>]` | PAT 등록. `--from-stdin`, `--token`, `--reset`, `--allow-file-pat`, `--server-url`. |
+| `chronos-sync migrate` | v0.4.x `config.json` → auth-mode 일회성 변환. `--dry-run`, `--force`. |
+| `chronos-sync daemon` | launchd 호환 백그라운드 모드. 일반 사용자 비권장. |
+| `chronos-sync status` | 룸별 마지막 동기화 시각. |
+| `chronos-sync health` | 헬스 체크 (JSON). 실패 시 exit 1. |
+| `chronos-sync interval <초> \| --get` | 주기 직접 PUT/GET (legacy-mode 잔존). auth-mode에서는 웹 UI 사용 권장. |
+| `chronos-sync diagnose senders [chat]` | `참여자_<id>` 폴백 원인 분석. |
+| `chronos-sync harvest` | KakaoTalk UI 자동 스크롤 1회 (수동 backfill). |
+| `chronos-sync version` / `--version` / `-v` | 버전. |
+| `chronos-sync help` / `--help` / `-h` | 도움말. |
 
-### 기본 설정 예시
+각 서브커맨드의 상세 도움말은 `chronos-sync <cmd> --help`.
 
-```json
-{
-  "server_url": "https://your-chronos-server.example.com",
-  "pat": "chr_pat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "interval_seconds": 300,
-  "rooms": [
-    {
-      "chat_name": "팀 채팅방",
-      "project_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-      "room_name": "team-chat"
-    }
-  ]
-}
-```
+## Migration (v0.4.x → v0.5.x)
 
-### 설정 필드 설명
-
-| 필드 | 필수 | 설명 |
-|------|------|------|
-| `server_url` | 필수 | Chronos 서버 주소 |
-| `pat` | 필수 | Chronos API 키 (`chr_pat_`으로 시작하는 32자 hex) |
-| `interval_seconds` | 선택 | 동기화 주기(초). 기본값 `300`, 범위 `10`–`3600` |
-| `kakaocli_path` | 선택 | kakaocli 바이너리 경로. 생략 시 `$PATH`에서 탐색 |
-| `since` | 선택 | `--since` 윈도우 세부 조정 ([아래 참고](#since-옵션)) |
-| `rooms` | 필수 | 동기화할 채팅방 목록 (1개 이상) |
-
-### rooms 필드
-
-| 필드 | 필수 | 설명 |
-|------|------|------|
-| `chat_name` | `chat_id` 없을 때 필수 | kakaocli에서 표시되는 채팅방 이름 |
-| `chat_id` | `chat_name` 없을 때 필수 | 카카오 채팅방 고유 ID (오픈채팅은 반드시 사용) |
-| `project_id` | 필수 | Chronos 프로젝트 UUID |
-| `room_name` | 필수 | Chronos 내부 룸 슬러그 |
-| `kakao_original_name` | 선택 | 오픈채팅 원본 이름 (일관성 검증용) |
-
-> **오픈채팅방 주의**: 오픈채팅은 `kakaocli chats --json`에서 이름이 `(unknown)`으로 표시됩니다.  
-> 이 경우 `chat_name` 대신 `chat_id`를 사용해야 합니다.  
-> `chat_id`는 정밀도 손실 방지를 위해 **반드시 문자열**로 입력하세요.
-
-```json
-{
-  "chat_id": "18296430865364356",
-  "project_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "room_name": "open-chat-room"
-}
-```
-
-### since 옵션
-
-첫 동기화 시 `--since` 윈도우를 조정할 때 사용합니다.
-
-```json
-{
-  "since": {
-    "multiplier": 2,
-    "override_seconds": 0
-  }
-}
-```
-
-| 필드 | 설명 |
-|------|------|
-| `multiplier` | `interval_seconds`에 곱해 폴백 윈도우 계산. 기본값 `2` |
-| `override_seconds` | 윈도우를 이 값으로 고정. `0`이면 kakaocli 기본 페이지 사용 |
-
-## 명령어
-
-### auth — PAT 등록 (v0.5.0+)
+v0.4.x는 `~/.chronos/config.json`에 `pat`과 `rooms`를 직접 적었습니다. v0.5.0부터는 PAT는 Keychain, 룸/주기는 서버에서 관리합니다.
 
 ```bash
-chronos-sync auth                        # 대화형 (입력 숨김)
-pbpaste | chronos-sync auth --from-stdin # 클립보드에서 PAT 읽기
-chronos-sync auth --reset                # 기존 PAT 룸 등록 해제 후 재등록
+chronos-sync migrate --dry-run    # 변경 내용 미리 보기 (서버/Keychain/FS 무변경)
+chronos-sync migrate              # 실행. legacy config.json은 .legacy.bak.<ts>로 rename.
+chronos-sync                      # foreground 재시작 — auth-mode로 부팅
 ```
 
-PAT은 macOS Keychain에 저장됩니다 (service: `chronos-sync`, account: `<user_email>`). Keychain 사용 불가 시 `--allow-file-pat`으로 `~/.chronos/auth.token` (mode 0600) 파일 저장에 명시적으로 동의해야 합니다. 자세한 사용법은 `chronos-sync auth --help` 참조.
+`migrate`가 하는 일 (요약):
 
----
+1. 실행 중 데몬 검출 — `--force` 없이는 거부.
+2. legacy `config.json` 파싱.
+3. 서버 pre-flight (eligible projects 확인) → archived 룸은 자동 제외.
+4. (옵션) Y/n 확인.
+5. PUT `/api/account/auto-upload/rooms` (legacy PAT 사용).
+6. PUT `/api/account/settings/sync` (legacy interval).
+7. GET `/api/auto-upload/bootstrap` → `user_email` 추출.
+8. PAT를 Keychain에 저장 (또는 `--allow-file-pat`로 0600 파일).
+9. `~/.chronos/auth.json` 작성.
+10. `~/.chronos/config.json` → `config.json.legacy.bak.<timestamp>`로 rename.
 
-### 기본 실행 (포그라운드 모드)
+step 5-9 중 하나라도 실패하면 step 10(rename)은 실행되지 않고 legacy `config.json`은 그대로 보존됩니다. 사용자는 원인을 해결한 뒤 동일한 명령으로 재시도하면 됩니다 (idempotent).
+
+> **호환 윈도우:** v0.5.x는 legacy `config.json`을 deprecation 배너와 함께 계속 받아들입니다. v0.6.0부터 거부됩니다. v0.6.0 컷오버 시점은 별도 공지 (adoption 지표 ≥80%/14d 기준).
+
+## Troubleshooting
+
+### Keychain 사용 불가 (`Keychain unavailable`)
+
+원인: `security` CLI가 PATH에 없거나, 사용자 keychain이 잠겨 있거나, headless/CI 환경.
 
 ```bash
-chronos-sync
+# 일회성 — 위험을 감수하고 file 저장 (mode 0600 inside ~/.chronos/ mode 0700)
+chronos-sync auth --allow-file-pat
+
+# 환경변수로 설정
+CHRONOS_ALLOW_FILE_PAT=1 chronos-sync auth
 ```
 
-또는 동일하게:
+shared host에서는 권장하지 않습니다.
+
+### Legacy config 감지 (`Legacy config.json detected`)
+
+`chronos-sync auth` 호출 시 `~/.chronos/config.json`에 `pat` 또는 `rooms`가 남아 있으면 거부됩니다 (PR5 precondition). 먼저 `chronos-sync migrate`로 변환하거나, 이미 인증이 끝났다면 legacy 파일을 직접 옮기세요:
 
 ```bash
-chronos-sync run
-chronos-sync start
+mv ~/.chronos/config.json ~/.chronos/config.json.legacy.bak
 ```
 
-터미널에서 동기화 상태를 실시간으로 출력합니다.  
-**Ctrl+C** 또는 터미널을 닫으면 락을 해제하고 정상 종료됩니다.
+### Bootstrap cache stale > 24h (`bootstrap cache stale > 24h; check network`)
 
----
+서버 outage가 24h 이상 지속되면 데몬이 업로드를 거부하고 exit 1로 종료합니다. 네트워크 복구 후 `chronos-sync` 재실행 시 첫 cycle에서 prime 성공하면 다시 동작합니다. 24h 미만 outage는 정상 동작 (캐시 사용 + foreground UI에 `stale` 경고).
 
-### status — 동기화 상태 확인
+### 401 — PAT 거부 (`PAT rejected by server`)
+
+웹에서 PAT가 revoke됐거나 scope이 축소된 경우. cache가 자동 무효화 (`config.cache.json` → `.invalidated.<ts>`로 rename) 되고 데몬이 종료합니다. 새 PAT를 발급한 뒤:
 
 ```bash
-chronos-sync status
+chronos-sync auth --reset    # 기존 룸 등록 해제 후 재등록
+# 또는 단순 재인증
+chronos-sync auth
 ```
 
-설정된 각 채팅방의 마지막 동기화 시각과 연속 실패 횟수를 표시합니다.
+### `~/.chronos` 권한 오류 (`cannot create ~/.chronos: permission denied`)
 
----
-
-### health — 헬스 체크
+대개 root 소유로 만들어진 디렉터리:
 
 ```bash
-chronos-sync health
+sudo chown -R "$(whoami)" ~/.chronos && chmod 700 ~/.chronos
+chronos-sync auth
 ```
 
-JSON 형식으로 데몬 상태를 출력합니다. 이상 감지 시 exit code 1로 종료됩니다.
-
----
-
-### version — 버전 확인
+`HOME`이 read-only 볼륨이면 `CHRONOS_HOME=<writable path>` 환경변수로 우회:
 
 ```bash
-chronos-sync version
-chronos-sync --version
-chronos-sync -v
+CHRONOS_HOME=/var/cache/chronos-sync chronos-sync auth
+CHRONOS_HOME=/var/cache/chronos-sync chronos-sync
 ```
 
----
-
-### help — 도움말
+### 데몬 실행 중 migrate 시도 (`daemon is running`)
 
 ```bash
-chronos-sync help
-chronos-sync --help
-chronos-sync -h
+launchctl unload ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
+chronos-sync migrate
+launchctl load ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
 ```
 
----
+또는 `chronos-sync migrate --force` (running daemon이 같은 `~/.chronos`에 동시 쓰기를 할 수 있다는 점 감수).
 
-### daemon — 백그라운드 모드 (launchd 전용)
+### Sender 미해결 — 룸이 `consecutive_stuck_cycles` 증가
+
+`chronos-sync diagnose senders <chat>`로 어떤 sender_id가 NTUser에 매칭되지 않는지 확인. 일시적이라면 `chronos-sync harvest`로 강제 backfill.
+
+## 환경변수
+
+| 변수 | 효과 |
+|---|---|
+| `CHRONOS_HOME` | `~/.chronos` 대신 사용할 경로. read-only HOME 우회. |
+| `CHRONOS_ALLOW_FILE_PAT=1` | `--allow-file-pat`과 동일 — Keychain 불가 시 0600 파일에 PAT 저장 동의. |
+| `CHRONOS_NO_CAFFEINATE=1` | foreground 모드에서 macOS idle sleep 방지를 위한 `caffeinate` 자동 attach 비활성화. |
+
+## ~/.chronos 레이아웃 (v0.5.x)
+
+```
+~/.chronos/
+  auth.json              v0.5.0+ 필수. mode 0600. server_url, user_email, pat_hash_prefix, pat_storage, allow_file_pat, written_at.
+  auth.token             pat_storage='file' 일 때만. mode 0600. PAT 본문 (Keychain 대체).
+  config.cache.json      bootstrap snapshot. mode 0600. server_url, user_email, interval_seconds, rooms, etag, fetched_at, last_successful_fetch.
+  state.json             데몬-관리. 룸별 cursor + 사이클 상태.
+  chronos-sync.lock      single-instance PID lock.
+  config.json.legacy.bak.<ts>   migrate 후 보관용.
+```
+
+## launchd 등록 (선택)
+
+```xml
+<!-- ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>      <string>com.brightworks.chronos-sync</string>
+  <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/chronos-sync</string>
+      <string>daemon</string>
+    </array>
+  <key>KeepAlive</key>  <true/>
+  <key>StandardOutPath</key> <string>/tmp/chronos-sync.out</string>
+  <key>StandardErrorPath</key> <string>/tmp/chronos-sync.err</string>
+</dict>
+</plist>
+```
 
 ```bash
-chronos-sync daemon
+launchctl load ~/Library/LaunchAgents/com.brightworks.chronos-sync.plist
 ```
 
-> launchd plist와의 호환성 유지를 위해 존재합니다.  
-> **일반 사용자는 이 명령을 직접 실행하지 않아도 됩니다.** 터미널에서는 인자 없이 `chronos-sync`를 실행하세요.
+## 라이센스
 
-## 파일 위치
-
-| 파일 | 경로 | 설명 |
-|------|------|------|
-| 설정 파일 | `~/.chronos/config.json` | 사용자가 직접 편집 |
-| 상태 파일 | `~/.chronos/state.json` | 데몬이 자동 관리 (편집 불필요) |
-| 락 파일 | `~/.chronos/chronos-sync.lock` | 단일 인스턴스 보장용 |
-
-## 단일 인스턴스 동작
-
-chronos-sync는 동시에 하나의 프로세스만 허용합니다.  
-이미 실행 중인 인스턴스가 있으면 새 실행이 즉시 종료됩니다.  
-프로세스가 비정상 종료된 경우 스테일 락은 자동으로 재취득됩니다.
-
-## 문제 해결
-
-**`config.pat missing or malformed` 오류**  
-API 키가 `chr_pat_`으로 시작하는지 확인하세요.
-
-**오픈채팅방 이름이 `(unknown)`으로 나옴**  
-`chat_name` 대신 `chat_id`를 문자열로 입력하세요.
-
-**`chat_id` 정밀도 손실 경고**  
-채팅 ID가 큰 숫자인 경우 JSON에서 반드시 따옴표로 감쌉니다: `"chat_id": "18296430865364356"`
-
-**kakaocli를 찾을 수 없음**  
-`kakaocli_path` 필드에 바이너리 전체 경로를 지정하거나, `$PATH`에 kakaocli가 있는지 확인하세요.
-
-## 라이선스
-
-MIT
+MIT.

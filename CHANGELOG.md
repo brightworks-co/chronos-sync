@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.0 (2026-05-11)
+
+Server-driven config. The web account "Auto-Upload" tab now manages interval + room mappings; the CLI no longer needs a hand-edited `~/.chronos/config.json`.
+
+### Added
+
+- **`chronos-sync auth <PAT>` subcommand.** Registers a PAT for the new auth-mode flow. Defaults to macOS Keychain storage (service `chronos-sync`, account `<user_email>`). Opt-in mode-0600 file fallback via `--allow-file-pat` (or `CHRONOS_ALLOW_FILE_PAT=1`) when Keychain is unavailable. Supports `--from-stdin`, `--token`, `--server-url`, `--reset` (rotate PAT and release old room claims). Honors `CHRONOS_HOME` env override for read-only HOME volumes. ([#21])
+- **`chronos-sync migrate` subcommand.** One-shot conversion from v0.4.x `~/.chronos/config.json` to auth-mode. Pre-flight project validation (drops rows pointing at archived/inaccessible projects), running-daemon detection (`pgrep` + `launchctl`), `--dry-run` for safe preview, `--force` to override prompts, partial-failure rollback (legacy `config.json` preserved on any step 6-10 failure), idempotent re-run. ([#23])
+- **Bootstrap resolver.** Daemon pulls rooms + interval from `/api/auto-upload/bootstrap` every cycle with ETag caching. Atomic snapshot replace on 200, refresh on 304, cache invalidation on 401/403, keep-cache on 5xx/network/429 with 24h continuous-failure ceiling. Mirrors the proven `interval-resolver` shape (in-flight mutex, `MAX_BOOTSTRAP_CACHE_AGE_MS=24h`, `STALE_WARN_AGE_MS=20h`). ([#22])
+- **Foreground UI header v2.** Auth-mode shows `모드: auth — bootstrap: <label>, pat: <storage>` where the bootstrap label transitions through `ok (Xs ago) → stale (Xh ago) → refused (>24h) → missing`. Legacy-mode shows the v0.6.0 deprecation hint with a `chronos-sync migrate` cue. Pre-prime auth-mode shows `주기: 서버에서 받아오는 중…` instead of the misleading default fallback ([#22], hotfix on the same PR).
+- **`AuthCredentialMissingError`, `ConfigConflictError`, `ConfigMissingError`** classes in `state-file.ts` for actionable daemon-exit messages. ([#22])
+- **`src/daemon-detect.ts`** — `pgrep` + `launchctl` running-daemon probe; excludes own PID. ([#23])
+
+### Changed
+
+- v0.4.x `~/.chronos/config.json` (with embedded PAT + rooms) still works in v0.5.x with a one-shot deprecation banner on stderr. v0.6.0 will reject it.
+- `loadConfig()` is now a 4-branch dispatcher: auth-mode synthesis (auth.json + cache) / both-present defensive refuse / legacy with banner / `ConfigMissingError`. ([#22])
+- In auth-mode, `bootstrap-resolver` is the sole source of truth for `interval_seconds`. The legacy `interval-resolver` fetch path is bypassed in auth-mode. ([#22])
+- `api-client.ts` gains `getBootstrap()`, `deleteAutoUploadRoom()`, `listEligibleProjects()`, `putAutoUploadRooms()`, plus the `BootstrapPayload`, `AutoUploadMappingRow`, and `EligibleProject` types.
+
+### Migration
+
+v0.4.x users:
+
+```bash
+chronos-sync migrate --dry-run    # preview the plan
+chronos-sync migrate              # commit; legacy config.json renamed to .legacy.bak.<ts>
+chronos-sync                      # foreground; daemon picks up auth-mode
+```
+
+Greenfield users: `chronos-sync auth chr_pat_…` is enough.
+
+### Plan reference
+
+`.cmux/plans/auto-upload-server-driven-config.md` in the chronos repo.
+
+[#21]: https://github.com/brightworks-co/chronos-sync/pull/21
+[#22]: https://github.com/brightworks-co/chronos-sync/pull/22
+[#23]: https://github.com/brightworks-co/chronos-sync/pull/23
+
 ## 0.3.1 (unreleased)
 
 ### Fixed
