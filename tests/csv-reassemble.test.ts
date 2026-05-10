@@ -17,9 +17,15 @@ function msg(overrides: Partial<Parameters<typeof reassembleMacCsv>[0][number]>)
 }
 
 describe('reassembleMacCsv', () => {
-  it('emits the canonical Mac CSV header on the first line', () => {
+  it('emits the canonical 4-col v5 header on the first line', () => {
     const csv = reassembleMacCsv([])
-    expect(csv.startsWith('Date,User,Message\n')).toBe(true)
+    expect(csv.startsWith('Date,User,Message,LogId\n')).toBe(true)
+  })
+
+  it('emits a stringified logId in the 4th column to dodge BigInt precision loss', () => {
+    const bigId = '3835554415426912257' // 19-digit, > Number.MAX_SAFE_INTEGER
+    const csv = reassembleMacCsv([msg({ id: bigId })])
+    expect(csv).toContain(`,"${bigId}"`)
   })
 
   it('formats timestamps as KST YYYY-MM-DD HH:MM:SS', () => {
@@ -40,14 +46,14 @@ describe('reassembleMacCsv', () => {
       msg({ id: 1, sender: '홍길동', text: '안녕' }),
       msg({
         id: 2,
-        sender: '5동 1006호',
+        sender: 'user-1',
         text: '사진',
         timestamp: Date.UTC(2026, 3, 26, 0, 1, 0),
       }),
       msg({
         id: 3,
-        sender: '7동 1504호 제니',
-        text: '7동 1504호 제니님이 나갔습니다.',
+        sender: 'user-6',
+        text: 'user-6님이 나갔습니다.',
         timestamp: Date.UTC(2026, 3, 26, 0, 2, 0),
       }),
     ])
@@ -83,23 +89,23 @@ describe('reassembleMacCsv', () => {
 
   it('uses the v0.6.0 sender/text fields verbatim', () => {
     const csv = reassembleMacCsv([
-      msg({ sender: '카카오봇', text: '오픈채팅 메시지' }),
+      msg({ sender: 'bot-a', text: 'msg-z' }),
     ])
-    expect(csv).toContain('"카카오봇"')
-    expect(csv).toContain('"오픈채팅 메시지"')
+    expect(csv).toContain('"bot-a"')
+    expect(csv).toContain('"msg-z"')
   })
 
   it('rewrites feedType system-event payloads to localized placeholders', () => {
     const csv = reassembleMacCsv([
       msg({
         id: 1,
-        sender: '드림솔져(헬)',
+        sender: 'user-7',
         text: '{"feedType":25,"logId":3835554415426912257,"hidden":true,"targetRevision":1}',
       }),
       msg({
         id: 2,
-        sender: '시스템',
-        text: '{"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"드림솔져"}]}',
+        sender: 'system',
+        text: '{"feedType":4,"members":[{"userId":6321186593654462422,"nickName":"user-7"}]}',
         timestamp: Date.UTC(2026, 3, 26, 0, 1, 0),
       }),
     ])
@@ -107,7 +113,7 @@ describe('reassembleMacCsv', () => {
     expect(parsed.messages).toHaveLength(2)
     expect(parsed.messages[0].text).toBe('삭제된 메시지')
     expect(parsed.messages[0].kind).toBe('deleted')
-    expect(parsed.messages[1].text).toBe('드림솔져님이 들어왔습니다')
+    expect(parsed.messages[1].text).toBe('user-7님이 들어왔습니다')
     expect(parsed.messages[1].kind).toBe('announcement')
     // Raw JSON must not leak into the CSV
     expect(csv).not.toContain('feedType')
